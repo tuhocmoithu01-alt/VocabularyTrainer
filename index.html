@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vocabulary Trainer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">📚</span>
+        <div>
+          <h1>Vocabulary Trainer</h1>
+          <p>Học từ vựng tiếng Anh bằng LocalStorage</p>
+        </div>
+      </div>
+      <nav class="menu-bar" aria-label="Main menu">
+        <button class="menu-button active" data-page="add">➕ Thêm từ</button>
+        <button class="menu-button" data-page="learn">✍️ Luyện viết</button>
+        <button class="menu-button" data-page="test">📝 Test</button>
+      </nav>
+    </header>
+
+    <main class="app-main">
+      <section id="page-add" class="page active" aria-labelledby="add-title">
+        <div class="page-card">
+          <div class="page-header">
+            <div>
+              <h2 id="add-title">Thêm từ mới</h2>
+              <p>Nhập từ, nghĩa và ví dụ rồi lưu vào bộ từ của bạn.</p>
+            </div>
+          </div>
+
+          <form id="add-form" class="form-grid" autocomplete="off">
+            <label>
+              <span>Word</span>
+              <input type="text" id="input-word" name="word" required />
+            </label>
+            <label>
+              <span>Meaning</span>
+              <input type="text" id="input-meaning" name="meaning" required />
+            </label>
+            <label class="full-width">
+              <span>Example</span>
+              <textarea id="input-example" name="example" rows="3" required></textarea>
+            </label>
+            <div class="form-actions full-width">
+              <button type="submit" class="primary-button">Lưu từ</button>
+              <div id="add-feedback" class="feedback" aria-live="polite"></div>
+            </div>
+          </form>
+        </div>
+
+        <div class="page-card">
+          <div class="page-header">
+            <div>
+              <h2>Danh sách từ</h2>
+              <p>Quản lý từ vựng đã lưu trong trình duyệt.</p>
+            </div>
+          </div>
+          <div id="word-list" class="word-list"></div>
+        </div>
+      </section>
+
+      <section id="page-learn" class="page" aria-labelledby="learn-title">
+        <div class="page-card">
+          <div class="page-header">
+            <div>
+              <h2 id="learn-title">Luyện viết</h2>
+              <p>Chọn từ và số lần luyện, sau đó kiểm tra khả năng viết đúng.</p>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="field-card">
+              <label for="learn-count">Số lần luyện</label>
+              <select id="learn-count">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="20">20</option>
+                <option value="30">30</option>
+                <option value="50">50</option>
+              </select>
+            </div>
+            <div class="field-card full-width">
+              <label for="learn-selection">Chọn từ</label>
+              <div id="learn-selection" class="select-list"></div>
+            </div>
+            <div class="form-actions full-width">
+              <button id="learn-start" class="primary-button">Bắt đầu</button>
+              <div id="learn-feedback" class="feedback" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="learn-session" class="page-card hidden">
+          <div class="session-header">
+            <div>
+              <h3 id="session-title">Luyện viết</h3>
+              <p id="session-counter"></p>
+            </div>
+            <div class="progress-bar">
+              <span id="learn-progress" class="progress-fill"></span>
+            </div>
+          </div>
+
+          <div class="word-card learn-card">
+            <div class="card-row">
+              <span class="label">Word</span>
+              <p id="display-word" class="word-value"></p>
+            </div>
+            <div class="card-row">
+              <span class="label">Meaning</span>
+              <p id="display-meaning"></p>
+            </div>
+            <div class="card-row">
+              <span class="label">Example</span>
+              <p id="display-example"></p>
+            </div>
+            <label class="word-input-label">
+              <span>Gõ từ</span>
+              <input type="text" id="learn-answer" autocomplete="off" />
+            </label>
+            <div class="button-row">
+              <button id="learn-check" class="secondary-button">Kiểm tra</button>
+              <button id="learn-toggle" class="secondary-button">Ẩn từ</button>
+              <button id="learn-known" class="primary-button">Đã thuộc</button>
+            </div>
+            <div id="learn-message" class="feedback" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-test" class="page" aria-labelledby="test-title">
+        <div class="page-card">
+          <div class="page-header">
+            <div>
+              <h2 id="test-title">Test</h2>
+              <p>Kiểm tra khả năng gõ từ dựa trên nghĩa và ví dụ.</p>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button id="test-start" class="primary-button">Bắt đầu Test</button>
+            <div id="test-feedback" class="feedback" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div id="test-session" class="page-card hidden">
+          <div class="session-header">
+            <div>
+              <h3 id="test-title-session">Test từ vựng</h3>
+              <p id="test-counter"></p>
+            </div>
+            <div class="progress-bar">
+              <span id="test-progress" class="progress-fill"></span>
+            </div>
+          </div>
+
+          <div class="word-card test-card">
+            <div class="card-row">
+              <span class="label">Meaning</span>
+              <p id="test-meaning"></p>
+            </div>
+            <div class="card-row">
+              <span class="label">Example</span>
+              <p id="test-example"></p>
+            </div>
+            <label class="word-input-label">
+              <span>Gõ từ</span>
+              <input type="text" id="test-answer" autocomplete="off" />
+            </label>
+            <div class="form-actions test-actions">
+              <button id="test-submit" class="primary-button">Nộp</button>
+              <button id="test-next" class="secondary-button hidden">Tiếp</button>
+            </div>
+            <div id="test-message" class="feedback" aria-live="polite"></div>
+          </div>
+
+          <div id="test-summary" class="summary-card hidden">
+            <h3>Kết thúc test</h3>
+            <p id="summary-score"></p>
+            <button id="test-restart" class="primary-button">Chạy lại</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
