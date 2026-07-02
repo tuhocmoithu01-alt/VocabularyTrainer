@@ -217,6 +217,12 @@ textarea {
   transform: translateY(-1px);
 }
 
+.secondary-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .feedback {
   min-height: 24px;
   color: var(--muted);
@@ -347,6 +353,28 @@ textarea {
 
 .summary-card h3 {
   margin: 0;
+}
+
+.active-mode {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid rgba(37, 99, 235, 0.24);
+}
+
+.session-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--primary);
+  font-size: 0.9rem;
 }
 
 @media (max-width: 840px) {

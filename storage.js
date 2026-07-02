@@ -33,11 +33,12 @@ export function saveVocabulary(words) {
  * @param {string} example
  * @returns {Object}
  */
-export function createVocabularyEntry(word, meaning, example) {
+export function createVocabularyEntry(word, meaning, example, ipa = '') {
   return {
     word: word.trim(),
     meaning: meaning.trim(),
     example: example.trim(),
+    ipa: ipa.trim(),
     writeCount: 0,
     correct: 0,
     wrong: 0,
@@ -57,7 +58,7 @@ export function addVocabularyEntry(entry) {
     throw new Error('Từ này đã tồn tại.');
   }
 
-  const newEntry = createVocabularyEntry(entry.word, entry.meaning, entry.example);
+  const newEntry = createVocabularyEntry(entry.word, entry.meaning, entry.example, entry.ipa);
   words.unshift(newEntry);
   saveVocabulary(words);
   return newEntry;

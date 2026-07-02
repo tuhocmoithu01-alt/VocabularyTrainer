@@ -42,6 +42,10 @@
               <span>Meaning</span>
               <input type="text" id="input-meaning" name="meaning" required />
             </label>
+            <label>
+              <span>IPA (optional)</span>
+              <input type="text" id="input-ipa" name="ipa" placeholder="/wɜːrk/" />
+            </label>
             <label class="full-width">
               <span>Example</span>
               <textarea id="input-example" name="example" rows="3" required></textarea>
@@ -138,12 +142,22 @@
           <div class="page-header">
             <div>
               <h2 id="test-title">Test</h2>
-              <p>Kiểm tra khả năng gõ từ dựa trên nghĩa và ví dụ.</p>
+              <p>Chọn một chế độ để bắt đầu luyện nghe, nói và viết từ vựng.</p>
             </div>
           </div>
-          <div class="form-actions">
-            <button id="test-start" class="primary-button">Bắt đầu Test</button>
-            <div id="test-feedback" class="feedback" aria-live="polite"></div>
+          <div class="form-grid">
+            <div class="field-card">
+              <span class="label">Chọn chế độ</span>
+              <div class="button-row" id="test-mode-picker">
+                <button type="button" id="test-mode-speaking" class="secondary-button" data-mode="speaking">🎤 Speaking Test</button>
+                <button type="button" id="test-mode-dictation" class="secondary-button" data-mode="dictation">✍️ Dictation Test</button>
+              </div>
+              <div id="test-mode-hint" class="feedback">Chọn một chế độ rồi bắt đầu.</div>
+            </div>
+            <div class="form-actions">
+              <button id="test-start" class="primary-button">Bắt đầu Test</button>
+              <div id="test-feedback" class="feedback" aria-live="polite"></div>
+            </div>
           </div>
         </div>
 
@@ -156,24 +170,30 @@
             <div class="progress-bar">
               <span id="test-progress" class="progress-fill"></span>
             </div>
+            <div class="session-meta">
+              <span id="test-mode-label" class="mode-pill"></span>
+              <span id="test-stage-label" class="mode-pill"></span>
+            </div>
           </div>
 
           <div class="word-card test-card">
             <div class="card-row">
-              <span class="label">Meaning</span>
+              <span class="label">Instruction</span>
               <p id="test-meaning"></p>
             </div>
             <div class="card-row">
-              <span class="label">Example</span>
+              <span class="label">Prompt</span>
               <p id="test-example"></p>
             </div>
             <label class="word-input-label">
-              <span>Gõ từ</span>
+              <span id="test-input-label">Gõ từ</span>
               <input type="text" id="test-answer" autocomplete="off" />
             </label>
-            <div class="form-actions test-actions">
-              <button id="test-submit" class="primary-button">Nộp</button>
-              <button id="test-next" class="secondary-button hidden">Tiếp</button>
+            <div class="button-row test-actions">
+              <button id="test-listen" class="secondary-button">🔊 Listen</button>
+              <button id="test-record" class="secondary-button">🎤 Record</button>
+              <button id="test-submit" class="primary-button">Kiểm tra</button>
+              <button id="test-next" class="secondary-button hidden">⏭ Next</button>
             </div>
             <div id="test-message" class="feedback" aria-live="polite"></div>
           </div>
@@ -181,6 +201,7 @@
           <div id="test-summary" class="summary-card hidden">
             <h3>Kết thúc test</h3>
             <p id="summary-score"></p>
+            <p id="summary-breakdown"></p>
             <button id="test-restart" class="primary-button">Chạy lại</button>
           </div>
         </div>
