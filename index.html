@@ -35,6 +35,14 @@
 
           <form id="add-form" class="form-grid" autocomplete="off">
             <label>
+              <span>Topic</span>
+              <select id="input-topic" name="topic"></select>
+            </label>
+            <label>
+              <span>Sub Topic</span>
+              <select id="input-subtopic" name="subTopic"></select>
+            </label>
+            <label>
               <span>Word</span>
               <input type="text" id="input-word" name="word" required />
             </label>
@@ -78,6 +86,18 @@
           </div>
 
           <div class="form-grid">
+            <div class="field-card">
+              <label>
+                <span>Topic</span>
+                <select id="learn-topic-filter"></select>
+              </label>
+            </div>
+            <div class="field-card">
+              <label>
+                <span>Sub Topic</span>
+                <select id="learn-subtopic-filter"></select>
+              </label>
+            </div>
             <div class="field-card">
               <label for="learn-count">Số lần luyện</label>
               <select id="learn-count">
@@ -146,6 +166,18 @@
             </div>
           </div>
           <div class="form-grid">
+            <div class="field-card">
+              <label>
+                <span>Topic</span>
+                <select id="test-topic-filter"></select>
+              </label>
+            </div>
+            <div class="field-card">
+              <label>
+                <span>Sub Topic</span>
+                <select id="test-subtopic-filter"></select>
+              </label>
+            </div>
             <div class="field-card">
               <span class="label">Chọn chế độ</span>
               <div class="button-row" id="test-mode-picker">

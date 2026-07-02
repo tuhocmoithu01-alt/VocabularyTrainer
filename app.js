@@ -1,24 +1,40 @@
 import {
   addVocabularyEntry,
-  createVocabularyEntry,
   findVocabularyEntry,
+  filterVocabularyByTopic,
+  getUniqueSubTopics,
+  getUniqueTopics,
+  loadSubTopics,
+  loadTopics,
   loadVocabulary,
   removeVocabularyEntry,
-  saveVocabulary,
+  saveSubTopics,
+  saveTopics,
   updateVocabularyEntry,
+  DEFAULT_TOPIC,
+  DEFAULT_SUBTOPIC,
 } from './storage.js';
+import { fetchWordIpa } from './dictionary.js';
 import { buildLearnQueue, formatLearnLabel, isLearnAnswerCorrect, toggleWordVisibility } from './learn.js';
-import { buildTestQueue, isTestAnswerCorrect } from './test.js';
+import { buildTestQueue } from './test.js';
+
+const ADD_TOPIC_VALUE = '__add_topic__';
+const ADD_SUBTOPIC_VALUE = '__add_subtopic__';
+const ALL_FILTER_VALUE = '';
 
 const pageButtons = document.querySelectorAll('.menu-button');
 const pages = document.querySelectorAll('.page');
 const addForm = document.getElementById('add-form');
+const inputTopic = document.getElementById('input-topic');
+const inputSubtopic = document.getElementById('input-subtopic');
 const inputWord = document.getElementById('input-word');
 const inputMeaning = document.getElementById('input-meaning');
 const inputIpa = document.getElementById('input-ipa');
 const inputExample = document.getElementById('input-example');
 const addFeedback = document.getElementById('add-feedback');
 const wordList = document.getElementById('word-list');
+const learnTopicFilter = document.getElementById('learn-topic-filter');
+const learnSubtopicFilter = document.getElementById('learn-subtopic-filter');
 const learnSelection = document.getElementById('learn-selection');
 const learnCount = document.getElementById('learn-count');
 const learnStart = document.getElementById('learn-start');
@@ -34,6 +50,8 @@ const learnKnown = document.getElementById('learn-known');
 const learnMessage = document.getElementById('learn-message');
 const learnProgress = document.getElementById('learn-progress');
 const sessionCounter = document.getElementById('session-counter');
+const testTopicFilter = document.getElementById('test-topic-filter');
+const testSubtopicFilter = document.getElementById('test-subtopic-filter');
 const testStart = document.getElementById('test-start');
 const testFeedback = document.getElementById('test-feedback');
 const testSession = document.getElementById('test-session');
@@ -81,6 +99,151 @@ function resetAddForm() {
   addFeedback.textContent = '';
 }
 
+function buildSelectOptions(items, includeAll = false, includeAdd = false) {
+  const options = [];
+  if (includeAll) {
+    options.push({ value: ALL_FILTER_VALUE, label: 'All' });
+  }
+
+  items.forEach((item) => {
+    options.push({ value: item, label: item });
+  });
+
+  if (includeAdd) {
+    options.push({ value: ADD_TOPIC_VALUE, label: '+ Add Topic' });
+  }
+
+  return options;
+}
+
+function populateSelect(selectElement, options, selectedValue) {
+  selectElement.innerHTML = options
+    .map((option) => `<option value="${option.value}">${option.label}</option>`) // no escaping needed for trusted labels
+    .join('');
+
+  if (selectedValue && options.some((option) => option.value === selectedValue)) {
+    selectElement.value = selectedValue;
+  }
+}
+
+function getWordsFromFilters(topic, subTopic) {
+  if (!topic && !subTopic) {
+    return loadVocabulary();
+  }
+
+  return filterVocabularyByTopic(loadVocabulary(), topic || undefined, subTopic || undefined);
+}
+
+function getStoredTopics() {
+  const topics = loadTopics();
+  return topics.length ? topics : [DEFAULT_TOPIC];
+}
+
+function getStoredSubTopics(topic) {
+  const subTopics = loadSubTopics(topic);
+  return subTopics.length ? subTopics : [DEFAULT_SUBTOPIC];
+}
+
+function addTopicToStorage(topic) {
+  const topics = getStoredTopics();
+  const normalizedTopic = topic.trim();
+  const exists = topics.some((item) => item.toLowerCase() === normalizedTopic.toLowerCase());
+  if (exists) {
+    throw new Error('Topic đã tồn tại.');
+  }
+  saveTopics([...topics, normalizedTopic]);
+}
+
+function addSubTopicToStorage(topic, subTopic) {
+  const normalizedTopic = topic.trim();
+  const normalizedSubTopic = subTopic.trim();
+  const subTopics = getStoredSubTopics(normalizedTopic);
+  const exists = subTopics.some((item) => item.toLowerCase() === normalizedSubTopic.toLowerCase());
+  if (exists) {
+    throw new Error('Sub Topic đã tồn tại.');
+  }
+  saveSubTopics([...subTopics, normalizedSubTopic], normalizedTopic);
+}
+
+function promptForNewTopic() {
+  const topicName = window.prompt('Nhập tên Topic mới:');
+  if (!topicName || !topicName.trim()) {
+    return null;
+  }
+
+  const normalizedTopic = topicName.trim();
+  try {
+    addTopicToStorage(normalizedTopic);
+    addFeedback.textContent = '';
+    return normalizedTopic;
+  } catch (error) {
+    addFeedback.textContent = error.message;
+    return null;
+  }
+}
+
+function promptForNewSubTopic(topic) {
+  const subTopicName = window.prompt('Nhập tên Sub Topic mới:');
+  if (!subTopicName || !subTopicName.trim()) {
+    return null;
+  }
+
+  const normalizedSubTopic = subTopicName.trim();
+  try {
+    addSubTopicToStorage(topic, normalizedSubTopic);
+    addFeedback.textContent = '';
+    return normalizedSubTopic;
+  } catch (error) {
+    addFeedback.textContent = error.message;
+    return null;
+  }
+}
+
+function refreshAddFormTopicList(selectedTopic = DEFAULT_TOPIC) {
+  const topics = getStoredTopics();
+  const topicOptions = buildSelectOptions(topics, false, true);
+  populateSelect(inputTopic, topicOptions, selectedTopic);
+
+  const topicValue = inputTopic.value === ADD_TOPIC_VALUE ? selectedTopic : inputTopic.value;
+  refreshAddFormSubtopicList(topicValue);
+}
+
+function refreshAddFormSubtopicList(topic, selectedSubtopic = DEFAULT_SUBTOPIC) {
+  const subTopics = getStoredSubTopics(topic);
+  const subtopicOptions = subTopics
+    .map((sub) => ({ value: sub, label: sub }))
+    .concat([{ value: ADD_SUBTOPIC_VALUE, label: '+ Add Sub Topic' }]);
+  populateSelect(inputSubtopic, subtopicOptions, selectedSubtopic);
+}
+
+function refreshFilterControls() {
+  const topics = getStoredTopics();
+  const topicOptions = buildSelectOptions(topics, true, false);
+  populateSelect(learnTopicFilter, topicOptions, ALL_FILTER_VALUE);
+  populateSelect(testTopicFilter, topicOptions, ALL_FILTER_VALUE);
+
+  updateLearnFilterSubtopics();
+  updateTestFilterSubtopics();
+}
+
+function updateLearnFilterSubtopics() {
+  const selectedTopic = learnTopicFilter.value;
+  const subTopics = getStoredSubTopics(selectedTopic || undefined);
+  const options = [{ value: ALL_FILTER_VALUE, label: 'All' }].concat(
+    subTopics.map((sub) => ({ value: sub, label: sub })),
+  );
+  populateSelect(learnSubtopicFilter, options, ALL_FILTER_VALUE);
+}
+
+function updateTestFilterSubtopics() {
+  const selectedTopic = testTopicFilter.value;
+  const subTopics = getStoredSubTopics(selectedTopic || undefined);
+  const options = [{ value: ALL_FILTER_VALUE, label: 'All' }].concat(
+    subTopics.map((sub) => ({ value: sub, label: sub })),
+  );
+  populateSelect(testSubtopicFilter, options, ALL_FILTER_VALUE);
+}
+
 function renderWordList() {
   const words = loadVocabulary();
   vocabulary = words;
@@ -91,6 +254,8 @@ function renderWordList() {
             <div class="word-item" data-word="${entry.word}">
               <div>
                 <h3>${entry.word}</h3>
+                <p><strong>Topic:</strong> ${entry.topic}</p>
+                <p><strong>Sub Topic:</strong> ${entry.subTopic}</p>
                 <p><strong>Meaning:</strong> ${entry.meaning}</p>
                 <p><strong>Example:</strong> ${entry.example}</p>
                 <p><strong>IPA:</strong> ${entry.ipa || '—'}</p>
@@ -105,7 +270,9 @@ function renderWordList() {
 }
 
 function renderLearnSelection() {
-  const words = loadVocabulary();
+  const topic = learnTopicFilter.value || undefined;
+  const subTopic = learnSubtopicFilter.value || undefined;
+  const words = filterVocabularyByTopic(loadVocabulary(), topic, subTopic);
   vocabulary = words;
   learnSelection.innerHTML = words.length
     ? words
@@ -114,19 +281,19 @@ function renderLearnSelection() {
             <div class="select-item">
               <label>
                 <input type="radio" name="learn-word" value="${entry.word}" />
-                <span>${formatLearnLabel(entry)}</span>
+                <span>${formatLearnLabel(entry)} • ${entry.topic} / ${entry.subTopic}</span>
               </label>
             </div>
           `,
         )
         .join('')
-    : '<p class="feedback">Không có từ để luyện. Vui lòng thêm từ mới.</p>';
+    : '<p class="feedback">Không có từ để luyện. Vui lòng thêm từ mới hoặc thay đổi bộ lọc.</p>';
 }
 
 function renderTestState() {
-  const words = loadVocabulary();
+  const words = getWordsFromFilters(testTopicFilter.value, testSubtopicFilter.value);
   vocabulary = words;
-  testFeedback.textContent = words.length ? '' : 'Không có từ để test. Vui lòng thêm từ mới.';
+  testFeedback.textContent = words.length ? '' : 'Không có từ để test theo bộ lọc hiện tại. Vui lòng chọn lại.';
 }
 
 function setLearnSessionVisibility(visible) {
@@ -585,9 +752,9 @@ function startTestSession() {
     return;
   }
 
-  const words = loadVocabulary();
+  const words = getWordsFromFilters(testTopicFilter.value, testSubtopicFilter.value);
   if (!words.length) {
-    testFeedback.textContent = 'Không có từ để test. Thêm từ mới trước.';
+    testFeedback.textContent = 'Không có từ để test theo bộ lọc hiện tại. Vui lòng chọn lại.';
     return;
   }
 
@@ -612,22 +779,47 @@ function bindEvents() {
     button.addEventListener('click', () => showPage(button.dataset.page));
   });
 
-  addForm.addEventListener('submit', (event) => {
+  addForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const word = inputWord.value.trim();
     const meaning = inputMeaning.value.trim();
     const example = inputExample.value.trim();
-    const ipa = inputIpa.value.trim();
+    let ipa = inputIpa.value.trim();
+    let topic = inputTopic.value;
+    let subTopic = inputSubtopic.value;
 
     if (!word || !meaning || !example) {
       addFeedback.textContent = 'Vui lòng nhập đủ thông tin.';
       return;
     }
 
+    if (topic === ADD_TOPIC_VALUE) {
+      const newTopic = promptForNewTopic();
+      if (!newTopic) {
+        return;
+      }
+      topic = newTopic;
+    }
+
+    if (subTopic === ADD_SUBTOPIC_VALUE) {
+      const activeTopic = topic === ADD_TOPIC_VALUE ? DEFAULT_TOPIC : topic;
+      const newSubTopic = promptForNewSubTopic(activeTopic);
+      if (!newSubTopic) {
+        return;
+      }
+      subTopic = newSubTopic;
+    }
+
+    if (!ipa) {
+      ipa = await fetchWordIpa(word);
+    }
+
     try {
-      addVocabularyEntry({ word, meaning, example, ipa });
+      addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic });
       addFeedback.textContent = 'Lưu từ thành công.';
       resetAddForm();
+      refreshAddFormTopicList(topic);
+      refreshFilterControls();
       renderWordList();
       renderLearnSelection();
       renderTestState();
@@ -649,6 +841,64 @@ function bindEvents() {
     removeVocabularyEntry(wordToDelete);
     renderWordList();
     renderLearnSelection();
+    renderTestState();
+  });
+
+  inputTopic.addEventListener('focus', () => {
+    inputTopic.dataset.previousValue = inputTopic.value;
+  });
+
+  inputTopic.addEventListener('change', () => {
+    if (inputTopic.value === ADD_TOPIC_VALUE) {
+      const previousTopic = inputTopic.dataset.previousValue || DEFAULT_TOPIC;
+      const newTopic = promptForNewTopic();
+      if (newTopic) {
+        refreshAddFormTopicList(newTopic);
+        inputTopic.value = newTopic;
+        refreshAddFormSubtopicList(newTopic);
+      } else {
+        refreshAddFormTopicList(previousTopic);
+        inputTopic.value = previousTopic;
+      }
+      return;
+    }
+    refreshAddFormSubtopicList(inputTopic.value);
+  });
+
+  inputSubtopic.addEventListener('focus', () => {
+    inputSubtopic.dataset.previousValue = inputSubtopic.value;
+  });
+
+  inputSubtopic.addEventListener('change', () => {
+    if (inputSubtopic.value === ADD_SUBTOPIC_VALUE) {
+      const topicName = inputTopic.value === ADD_TOPIC_VALUE ? DEFAULT_TOPIC : inputTopic.value;
+      const previousSubTopic = inputSubtopic.dataset.previousValue || DEFAULT_SUBTOPIC;
+      const newSubTopic = promptForNewSubTopic(topicName);
+      if (newSubTopic) {
+        refreshAddFormSubtopicList(topicName, newSubTopic);
+        inputSubtopic.value = newSubTopic;
+      } else {
+        refreshAddFormSubtopicList(topicName, previousSubTopic);
+        inputSubtopic.value = previousSubTopic;
+      }
+    }
+  });
+
+  learnTopicFilter.addEventListener('change', () => {
+    updateLearnFilterSubtopics();
+    renderLearnSelection();
+  });
+
+  learnSubtopicFilter.addEventListener('change', () => {
+    renderLearnSelection();
+  });
+
+  testTopicFilter.addEventListener('change', () => {
+    updateTestFilterSubtopics();
+    renderTestState();
+  });
+
+  testSubtopicFilter.addEventListener('change', () => {
     renderTestState();
   });
 
@@ -687,10 +937,12 @@ function bindEvents() {
 }
 
 function initializeApp() {
+  bindEvents();
+  refreshAddFormTopicList();
+  refreshFilterControls();
   renderWordList();
   renderLearnSelection();
   renderTestState();
-  bindEvents();
   setSelectedTestMode('');
   showPage('add');
 }
