@@ -44,7 +44,10 @@
             </label>
             <label>
               <span>Word</span>
-              <input type="text" id="input-word" name="word" required />
+              <div class="word-input-wrapper">
+                <input type="text" id="input-word" name="word" required autocomplete="off" />
+                <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Word suggestions"></ul>
+              </div>
             </label>
             <label>
               <span>Meaning</span>
@@ -59,7 +62,8 @@
               <textarea id="input-example" name="example" rows="3" required></textarea>
             </label>
             <div class="form-actions full-width">
-              <button type="submit" class="primary-button">Lưu từ</button>
+              <button type="submit" id="add-submit" class="primary-button">Lưu từ</button>
+              <button type="button" id="add-cancel" class="secondary-button hidden">Hủy</button>
               <div id="add-feedback" class="feedback" aria-live="polite"></div>
             </div>
           </form>

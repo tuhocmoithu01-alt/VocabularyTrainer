@@ -11,12 +11,13 @@ import {
   saveSubTopics,
   saveTopics,
   updateVocabularyEntry,
+  updateVocabularyEntryByWord,
   DEFAULT_TOPIC,
   DEFAULT_SUBTOPIC,
 } from './storage.js';
 import { fetchWordIpa } from './dictionary.js';
 import { buildLearnQueue, formatLearnLabel, isLearnAnswerCorrect, toggleWordVisibility } from './learn.js';
-import { buildTestQueue } from './test.js';
+import { buildTestQueue, filterWordSuggestions } from './test.js';
 
 const ADD_TOPIC_VALUE = '__add_topic__';
 const ADD_SUBTOPIC_VALUE = '__add_subtopic__';
@@ -32,6 +33,9 @@ const inputMeaning = document.getElementById('input-meaning');
 const inputIpa = document.getElementById('input-ipa');
 const inputExample = document.getElementById('input-example');
 const addFeedback = document.getElementById('add-feedback');
+const addSubmitButton = document.getElementById('add-submit');
+const addCancelButton = document.getElementById('add-cancel');
+const wordSuggestions = document.getElementById('word-suggestions');
 const wordList = document.getElementById('word-list');
 const learnTopicFilter = document.getElementById('learn-topic-filter');
 const learnSubtopicFilter = document.getElementById('learn-subtopic-filter');
@@ -88,6 +92,9 @@ let selectedTestMode = '';
 let dictationStage = 'word';
 let testRecognition = null;
 let sessionActive = false;
+let editingWord = null;
+let wordSuggestionItems = [];
+let activeSuggestionIndex = -1;
 
 function showPage(pageName) {
   pages.forEach((page) => page.classList.toggle('active', page.id === `page-${pageName}`));
@@ -96,7 +103,12 @@ function showPage(pageName) {
 
 function resetAddForm() {
   addForm.reset();
+  editingWord = null;
+  addSubmitButton.textContent = 'Lưu từ';
+  addCancelButton.classList.add('hidden');
   addFeedback.textContent = '';
+  refreshAddFormTopicList(DEFAULT_TOPIC);
+  hideWordSuggestions();
 }
 
 function buildSelectOptions(items, includeAll = false, includeAdd = false) {
@@ -261,7 +273,10 @@ function renderWordList() {
                 <p><strong>IPA:</strong> ${entry.ipa || '—'}</p>
                 <p><strong>Trạng thái:</strong> ${entry.learned ? 'Đã thuộc' : 'Chưa thuộc'}</p>
               </div>
-              <button type="button" class="delete-word">Xóa</button>
+              <div class="word-actions">
+                <button type="button" class="edit-word secondary-button">✏ Edit</button>
+                <button type="button" class="delete-word">🗑 Delete</button>
+              </div>
             </div>
           `,
         )
@@ -774,6 +789,68 @@ function startTestSession() {
   sessionActive = true;
 }
 
+function renderWordSuggestions() {
+  const query = inputWord.value.trim();
+  const suggestions = filterWordSuggestions(loadVocabulary(), query, 10);
+  wordSuggestionItems = suggestions;
+
+  if (!query || !suggestions.length) {
+    hideWordSuggestions();
+    return;
+  }
+
+  wordSuggestions.innerHTML = suggestions
+    .map(
+      (entry, index) => `
+        <li class="suggestion-item ${index === activeSuggestionIndex ? 'active' : ''}" role="option" data-word="${entry.word}">
+          ${entry.word}
+        </li>
+      `,
+    )
+    .join('');
+
+  wordSuggestions.classList.remove('hidden');
+}
+
+function hideWordSuggestions() {
+  wordSuggestions.classList.add('hidden');
+  wordSuggestions.innerHTML = '';
+  activeSuggestionIndex = -1;
+  wordSuggestionItems = [];
+}
+
+function selectSuggestion() {
+  const targetIndex = activeSuggestionIndex >= 0 ? activeSuggestionIndex : 0;
+  const selected = wordSuggestionItems[targetIndex];
+  if (!selected) {
+    return false;
+  }
+
+  inputWord.value = selected.word;
+  hideWordSuggestions();
+  return true;
+}
+
+function startEditMode(entry) {
+  editingWord = entry.word;
+  addSubmitButton.textContent = 'Cập nhật';
+  addCancelButton.classList.remove('hidden');
+  addFeedback.textContent = '';
+
+  const topic = entry.topic || DEFAULT_TOPIC;
+  const subTopic = entry.subTopic || DEFAULT_SUBTOPIC;
+  refreshAddFormTopicList(topic);
+  inputTopic.value = topic;
+  refreshAddFormSubtopicList(topic, subTopic);
+  inputSubtopic.value = subTopic;
+  inputWord.value = entry.word || '';
+  inputMeaning.value = entry.meaning || '';
+  inputIpa.value = entry.ipa || '';
+  inputExample.value = entry.example || '';
+  hideWordSuggestions();
+  inputWord.focus();
+}
+
 function bindEvents() {
   pageButtons.forEach((button) => {
     button.addEventListener('click', () => showPage(button.dataset.page));
@@ -815,10 +892,15 @@ function bindEvents() {
     }
 
     try {
-      addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic });
-      addFeedback.textContent = 'Lưu từ thành công.';
+      if (editingWord) {
+        updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, topic, subTopic });
+        addFeedback.textContent = 'Cập nhật thành công.';
+      } else {
+        addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic });
+        addFeedback.textContent = 'Lưu từ thành công.';
+      }
+
       resetAddForm();
-      refreshAddFormTopicList(topic);
       refreshFilterControls();
       renderWordList();
       renderLearnSelection();
@@ -828,7 +910,75 @@ function bindEvents() {
     }
   });
 
+  addCancelButton.addEventListener('click', () => {
+    resetAddForm();
+  });
+
+  inputWord.addEventListener('input', () => {
+    activeSuggestionIndex = -1;
+    renderWordSuggestions();
+  });
+
+  inputWord.addEventListener('focus', () => {
+    renderWordSuggestions();
+  });
+
+  inputWord.addEventListener('blur', () => {
+    window.setTimeout(() => {
+      hideWordSuggestions();
+    }, 140);
+  });
+
+  inputWord.addEventListener('keydown', (event) => {
+    if (!wordSuggestionItems.length) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      activeSuggestionIndex = (activeSuggestionIndex + 1) % wordSuggestionItems.length;
+      renderWordSuggestions();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      activeSuggestionIndex = activeSuggestionIndex <= 0 ? wordSuggestionItems.length - 1 : activeSuggestionIndex - 1;
+      renderWordSuggestions();
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      if (selectSuggestion()) {
+        return;
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      hideWordSuggestions();
+    }
+  });
+
+  wordSuggestions.addEventListener('mousedown', (event) => {
+    const suggestionItem = event.target.closest('.suggestion-item');
+    if (!suggestionItem) {
+      return;
+    }
+
+    event.preventDefault();
+    inputWord.value = suggestionItem.dataset.word;
+    hideWordSuggestions();
+    inputMeaning.focus();
+  });
+
   wordList.addEventListener('click', (event) => {
+    const editButton = event.target.closest('.edit-word');
+    if (editButton) {
+      const wordItem = editButton.closest('.word-item');
+      if (!wordItem) {
+        return;
+      }
+      const entryToEdit = findVocabularyEntry(wordItem.dataset.word);
+      if (entryToEdit) {
+        startEditMode(entryToEdit);
+      }
+      return;
+    }
+
     const deleteButton = event.target.closest('.delete-word');
     if (!deleteButton) {
       return;
@@ -839,6 +989,8 @@ function bindEvents() {
     }
     const wordToDelete = wordItem.dataset.word;
     removeVocabularyEntry(wordToDelete);
+    resetAddForm();
+    refreshFilterControls();
     renderWordList();
     renderLearnSelection();
     renderTestState();

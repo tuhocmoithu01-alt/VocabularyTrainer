@@ -13,6 +13,28 @@ function shuffle(items) {
 }
 
 /**
+ * Suggest matching words from the saved vocabulary list.
+ * @param {Array<Object>} words
+ * @param {string} query
+ * @param {number} limit
+ * @returns {Array<Object>}
+ */
+export function filterWordSuggestions(words, query, limit = 10) {
+  const normalizedQuery = (query || '').trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const matches = words.filter((entry) => typeof entry?.word === 'string' && entry.word.trim().toLowerCase().includes(normalizedQuery));
+  const prefixMatches = matches.filter((entry) => entry.word.trim().toLowerCase().startsWith(normalizedQuery));
+  const otherMatches = matches.filter((entry) => !entry.word.trim().toLowerCase().startsWith(normalizedQuery));
+
+  return [...prefixMatches, ...otherMatches]
+    .map((entry) => ({ ...entry, word: entry.word.trim() }))
+    .slice(0, limit);
+}
+
+/**
  * Build a randomized test queue from all words.
  * @param {Array<Object>} words
  * @returns {Array<Object>}

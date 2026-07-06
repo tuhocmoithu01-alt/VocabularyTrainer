@@ -254,6 +254,38 @@ export function removeVocabularyEntry(word) {
 }
 
 /**
+ * Update an existing vocabulary entry while preserving its progress statistics.
+ * @param {string} originalWord
+ * @param {Partial<Object>} updates
+ * @returns {Object | null}
+ */
+export function updateVocabularyEntryByWord(originalWord, updates) {
+  const words = loadVocabulary();
+  const normalizedOriginalWord = (originalWord || '').trim().toLowerCase();
+  const nextWord = (updates?.word || '').trim();
+
+  if (nextWord) {
+    const duplicate = words.find((item) => item.word.toLowerCase() !== normalizedOriginalWord && item.word.toLowerCase() === nextWord.toLowerCase());
+    if (duplicate) {
+      throw new Error('Từ này đã tồn tại.');
+    }
+  }
+
+  let updated = null;
+  const newWords = words.map((item) => {
+    if (item.word.toLowerCase() !== normalizedOriginalWord) {
+      return item;
+    }
+
+    updated = normalizeVocabularyEntry({ ...item, ...updates, word: nextWord || item.word });
+    return updated;
+  });
+
+  saveVocabulary(newWords);
+  return updated;
+}
+
+/**
  * Update a word entry with partial values.
  * @param {string} word
  * @param {Partial<Object>} updates
