@@ -125,6 +125,26 @@ export function loadVocabulary() {
   }
 }
 
+export function normalizeWordKey(value) {
+  return (value || '').trim().toLowerCase();
+}
+
+export function findDuplicateVocabularyEntry(words, candidateWord, currentWord = '') {
+  const normalizedCandidate = normalizeWordKey(candidateWord);
+  const normalizedCurrentWord = normalizeWordKey(currentWord);
+
+  if (!normalizedCandidate) {
+    return null;
+  }
+
+  return (
+    words.find((entry) => {
+      const normalizedEntryWord = normalizeWordKey(entry?.word);
+      return normalizedEntryWord === normalizedCandidate && normalizedEntryWord !== normalizedCurrentWord;
+    }) || null
+  );
+}
+
 export function loadTopics() {
   const storedTopics = parseList(localStorage.getItem(TOPICS_KEY), []);
   if (storedTopics.length) {

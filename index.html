@@ -48,6 +48,8 @@
                 <input type="text" id="input-word" name="word" required autocomplete="off" />
                 <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Word suggestions"></ul>
               </div>
+              <div id="duplicate-status" class="duplicate-status hidden" aria-live="polite"></div>
+              <div id="duplicate-card" class="duplicate-card hidden"></div>
             </label>
             <label>
               <span>Meaning</span>
@@ -112,6 +114,13 @@
                 <option value="50">50</option>
               </select>
             </div>
+            <div class="field-card">
+              <label for="learn-reading-mode">Reading Mode</label>
+              <select id="learn-reading-mode">
+                <option value="normal">Normal Pronunciation</option>
+                <option value="spelling">Spelling Mode</option>
+              </select>
+            </div>
             <div class="field-card full-width">
               <label for="learn-selection">Chọn từ</label>
               <div id="learn-selection" class="select-list"></div>
@@ -154,6 +163,7 @@
             <div class="button-row">
               <button id="learn-check" class="secondary-button">Kiểm tra</button>
               <button id="learn-toggle" class="secondary-button">Ẩn từ</button>
+              <button id="learn-replay" class="secondary-button">🔁 Replay</button>
               <button id="learn-known" class="primary-button">Đã thuộc</button>
             </div>
             <div id="learn-message" class="feedback" aria-live="polite"></div>
@@ -188,7 +198,22 @@
                 <button type="button" id="test-mode-speaking" class="secondary-button" data-mode="speaking">🎤 Speaking Test</button>
                 <button type="button" id="test-mode-dictation" class="secondary-button" data-mode="dictation">✍️ Dictation Test</button>
               </div>
+              <label class="hidden" id="speaking-mode-wrapper">
+                <span>Speaking Mode</span>
+                <select id="speaking-mode-select">
+                  <option value="vocabulary">Vocabulary</option>
+                  <option value="example">Example</option>
+                </select>
+              </label>
+              <label class="hidden" id="dictation-mode-wrapper">
+                <span>Dictation Mode</span>
+                <select id="dictation-mode-select">
+                  <option value="word">Word</option>
+                  <option value="example">Example</option>
+                </select>
+              </label>
               <div id="test-mode-hint" class="feedback">Chọn một chế độ rồi bắt đầu.</div>
+              <button type="button" id="sound-toggle" class="secondary-button">🔊 Sound: ON</button>
             </div>
             <div class="form-actions">
               <button id="test-start" class="primary-button">Bắt đầu Test</button>

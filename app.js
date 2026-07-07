@@ -1,5 +1,6 @@
 import {
   addVocabularyEntry,
+  findDuplicateVocabularyEntry,
   findVocabularyEntry,
   filterVocabularyByTopic,
   getUniqueSubTopics,
@@ -14,10 +15,29 @@ import {
   updateVocabularyEntryByWord,
   DEFAULT_TOPIC,
   DEFAULT_SUBTOPIC,
+  normalizeWordKey,
 } from './storage.js';
 import { fetchWordIpa } from './dictionary.js';
-import { buildLearnQueue, formatLearnLabel, isLearnAnswerCorrect, toggleWordVisibility } from './learn.js';
+import {
+  buildLearnQueue,
+  formatLearnLabel,
+  getSpellingSequence,
+  isLearnAnswerCorrect,
+  normalizeLearnReadingMode,
+  toggleWordVisibility,
+} from './learn.js';
 import { buildTestQueue, filterWordSuggestions } from './test.js';
+import { playAudioFeedback } from './sound.js';
+import {
+  getDictationInstruction,
+  getDictationPromptLabel,
+  getDictationPromptText,
+  getSpeakingInstruction,
+  getSpeakingPromptLabel,
+  getSpeakingPromptText,
+  normalizeDictationMode,
+  normalizeSpeakingMode,
+} from './speaking-mode.js';
 
 const ADD_TOPIC_VALUE = '__add_topic__';
 const ADD_SUBTOPIC_VALUE = '__add_subtopic__';
@@ -36,11 +56,14 @@ const addFeedback = document.getElementById('add-feedback');
 const addSubmitButton = document.getElementById('add-submit');
 const addCancelButton = document.getElementById('add-cancel');
 const wordSuggestions = document.getElementById('word-suggestions');
+const duplicateStatus = document.getElementById('duplicate-status');
+const duplicateCard = document.getElementById('duplicate-card');
 const wordList = document.getElementById('word-list');
 const learnTopicFilter = document.getElementById('learn-topic-filter');
 const learnSubtopicFilter = document.getElementById('learn-subtopic-filter');
 const learnSelection = document.getElementById('learn-selection');
 const learnCount = document.getElementById('learn-count');
+const learnReadingMode = document.getElementById('learn-reading-mode');
 const learnStart = document.getElementById('learn-start');
 const learnFeedback = document.getElementById('learn-feedback');
 const learnSession = document.getElementById('learn-session');
@@ -50,6 +73,7 @@ const displayExample = document.getElementById('display-example');
 const learnAnswer = document.getElementById('learn-answer');
 const learnCheck = document.getElementById('learn-check');
 const learnToggle = document.getElementById('learn-toggle');
+const learnReplay = document.getElementById('learn-replay');
 const learnKnown = document.getElementById('learn-known');
 const learnMessage = document.getElementById('learn-message');
 const learnProgress = document.getElementById('learn-progress');
@@ -79,22 +103,92 @@ const testStageLabel = document.getElementById('test-stage-label');
 const testInputLabel = document.getElementById('test-input-label');
 const testListen = document.getElementById('test-listen');
 const testRecord = document.getElementById('test-record');
+const speakingModeWrapper = document.getElementById('speaking-mode-wrapper');
+const speakingModeSelect = document.getElementById('speaking-mode-select');
+const dictationModeWrapper = document.getElementById('dictation-mode-wrapper');
+const dictationModeSelect = document.getElementById('dictation-mode-select');
+const soundToggle = document.getElementById('sound-toggle');
+
+// ===== SOUND SETTINGS =====
+const SOUND_ENABLED_KEY = 'soundEnabled';
+const SOUND_ENABLED_DEFAULT = true;
+const SOUND_VOLUME = 0.6;
+const CORRECT_SOUND_PATH = 'sounds/correct.mp3';
+const WRONG_SOUND_PATH = 'sounds/wrong.mp3';
+
+const correctAudio = new Audio(CORRECT_SOUND_PATH);
+const wrongAudio = new Audio(WRONG_SOUND_PATH);
+
+let soundEnabled = SOUND_ENABLED_DEFAULT;
 
 let vocabulary = [];
 let learnQueue = [];
 let currentLearnIndex = 0;
 let isHiddenWord = false;
+let selectedLearnReadingMode = 'normal';
+let learnSpellingTimer = null;
+let learnSpellingStepTimer = null;
+let learnSpellingRunId = 0;
 let testQueue = [];
 let currentTestIndex = 0;
 let testScore = 0;
 let testWrong = 0;
+let dictationWrongAttempts = 0;
 let selectedTestMode = '';
+let selectedSpeakingMode = 'vocabulary';
+let selectedDictationMode = 'word';
 let dictationStage = 'word';
 let testRecognition = null;
 let sessionActive = false;
 let editingWord = null;
 let wordSuggestionItems = [];
 let activeSuggestionIndex = -1;
+let duplicateHighlightTimer = null;
+
+function updateSoundToggleLabel() {
+  if (!soundToggle) {
+    return;
+  }
+  soundToggle.textContent = `🔊 Sound: ${soundEnabled ? 'ON' : 'OFF'}`;
+}
+
+function loadSoundSetting() {
+  try {
+    const storedValue = localStorage.getItem(SOUND_ENABLED_KEY);
+    soundEnabled = storedValue === null ? SOUND_ENABLED_DEFAULT : JSON.parse(storedValue);
+  } catch (error) {
+    soundEnabled = SOUND_ENABLED_DEFAULT;
+  }
+  updateSoundToggleLabel();
+}
+
+function setSoundEnabled(enabled) {
+  soundEnabled = enabled;
+  localStorage.setItem(SOUND_ENABLED_KEY, JSON.stringify(soundEnabled));
+  updateSoundToggleLabel();
+}
+
+function initializeAudio() {
+  [correctAudio, wrongAudio].forEach((audio) => {
+    audio.preload = 'auto';
+    audio.volume = SOUND_VOLUME;
+    audio.loop = false;
+  });
+}
+
+async function playCorrectSound() {
+  if (!soundEnabled) {
+    return false;
+  }
+  return playAudioFeedback(correctAudio, soundEnabled, console.error);
+}
+
+async function playWrongSound() {
+  if (!soundEnabled) {
+    return false;
+  }
+  return playAudioFeedback(wrongAudio, soundEnabled, console.error);
+}
 
 function showPage(pageName) {
   pages.forEach((page) => page.classList.toggle('active', page.id === `page-${pageName}`));
@@ -105,10 +199,12 @@ function resetAddForm() {
   addForm.reset();
   editingWord = null;
   addSubmitButton.textContent = 'Lưu từ';
+  addSubmitButton.disabled = false;
   addCancelButton.classList.add('hidden');
   addFeedback.textContent = '';
   refreshAddFormTopicList(DEFAULT_TOPIC);
   hideWordSuggestions();
+  updateDuplicateStatus();
 }
 
 function buildSelectOptions(items, includeAll = false, includeAdd = false) {
@@ -285,10 +381,11 @@ function renderWordList() {
 }
 
 function renderLearnSelection() {
+  const allWords = loadVocabulary();
+  vocabulary = allWords;
   const topic = learnTopicFilter.value || undefined;
   const subTopic = learnSubtopicFilter.value || undefined;
-  const words = filterVocabularyByTopic(loadVocabulary(), topic, subTopic);
-  vocabulary = words;
+  const words = filterVocabularyByTopic(allWords, topic, subTopic);
   learnSelection.innerHTML = words.length
     ? words
         .map(
@@ -306,8 +403,9 @@ function renderLearnSelection() {
 }
 
 function renderTestState() {
+  const allWords = loadVocabulary();
+  vocabulary = allWords;
   const words = getWordsFromFilters(testTopicFilter.value, testSubtopicFilter.value);
-  vocabulary = words;
   testFeedback.textContent = words.length ? '' : 'Không có từ để test theo bộ lọc hiện tại. Vui lòng chọn lại.';
 }
 
@@ -323,15 +421,127 @@ function setTestSessionVisibility(visible) {
   }
 }
 
+function clearLearnSpellingAnimation() {
+  if (learnSpellingTimer) {
+    window.clearTimeout(learnSpellingTimer);
+  }
+  if (learnSpellingStepTimer) {
+    window.clearTimeout(learnSpellingStepTimer);
+  }
+  learnSpellingTimer = null;
+  learnSpellingStepTimer = null;
+}
+
+function renderLearnWordDisplay(entry, highlightIndex = -1) {
+  if (!entry) {
+    return;
+  }
+
+  if (isHiddenWord) {
+    displayWord.textContent = '••••••';
+    return;
+  }
+
+  const mode = normalizeLearnReadingMode(learnReadingMode?.value || selectedLearnReadingMode);
+  if (mode !== 'spelling') {
+    displayWord.textContent = entry.word;
+    return;
+  }
+
+  const letters = getSpellingSequence(entry.word);
+  displayWord.innerHTML = letters
+    .map((letter, index) => {
+      const isActive = index <= highlightIndex;
+      return `<span class="spelling-letter${isActive ? ' active' : ''}">${letter}</span>`;
+    })
+    .join('');
+}
+
 function updateLearnDisplay() {
   const currentEntry = learnQueue[currentLearnIndex];
   displayMeaning.textContent = currentEntry.meaning;
   displayExample.textContent = currentEntry.example;
-  displayWord.textContent = isHiddenWord ? '••••••' : currentEntry.word;
+  renderLearnWordDisplay(currentEntry);
   learnToggle.textContent = isHiddenWord ? 'Hiện từ' : 'Ẩn từ';
   sessionCounter.textContent = `Từ ${currentLearnIndex + 1} / ${learnQueue.length}`;
   const progressPercent = Math.round(((currentLearnIndex + 1) / learnQueue.length) * 100);
   learnProgress.style.width = `${progressPercent}%`;
+}
+
+function speakLearnWord(entry) {
+  if (!entry || !('speechSynthesis' in window)) {
+    return false;
+  }
+
+  const synth = window.speechSynthesis;
+  const mode = normalizeLearnReadingMode(learnReadingMode?.value || selectedLearnReadingMode);
+  clearLearnSpellingAnimation();
+  synth.cancel();
+
+  if (mode !== 'spelling') {
+    const utterance = new SpeechSynthesisUtterance(entry.word);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.8;
+    utterance.pitch = 1;
+    synth.speak(utterance);
+    return true;
+  }
+
+  const letters = getSpellingSequence(entry.word);
+  if (!letters.length) {
+    return false;
+  }
+
+  const letterPauseMs = 500;
+  const finishPauseMs = 800;
+  let index = 0;
+  learnSpellingRunId += 1;
+  const currentRunId = learnSpellingRunId;
+
+  const updateHighlight = (nextIndex) => {
+    if (currentRunId !== learnSpellingRunId) {
+      return;
+    }
+    renderLearnWordDisplay(entry, nextIndex);
+  };
+
+  const speakNextLetter = () => {
+    if (currentRunId !== learnSpellingRunId || index >= letters.length) {
+      return;
+    }
+
+    const letterUtterance = new SpeechSynthesisUtterance(letters[index]);
+    letterUtterance.lang = 'en-US';
+    letterUtterance.rate = 0.8;
+    letterUtterance.pitch = 1;
+    letterUtterance.onend = () => {
+      if (currentRunId !== learnSpellingRunId) {
+        return;
+      }
+      updateHighlight(index);
+      index += 1;
+      if (index < letters.length) {
+        learnSpellingStepTimer = window.setTimeout(speakNextLetter, letterPauseMs);
+      } else {
+        learnSpellingTimer = window.setTimeout(() => {
+          if (currentRunId !== learnSpellingRunId) {
+            return;
+          }
+          const wholeWordUtterance = new SpeechSynthesisUtterance(entry.word);
+          wholeWordUtterance.lang = 'en-US';
+          wholeWordUtterance.rate = 0.8;
+          wholeWordUtterance.pitch = 1;
+          synth.speak(wholeWordUtterance);
+          renderLearnWordDisplay(entry, letters.length - 1);
+        }, finishPauseMs);
+      }
+    };
+    synth.speak(letterUtterance);
+  };
+
+  renderLearnWordDisplay(entry, -1);
+  speakNextLetter();
+  return true;
 }
 
 // Normalize user input so comparisons are robust across punctuation and casing.
@@ -354,8 +564,12 @@ function isSpeechRecognitionSupported() {
 // Toggle the active test mode between speaking and dictation.
 function setSelectedTestMode(mode) {
   selectedTestMode = mode;
+  selectedSpeakingMode = normalizeSpeakingMode(speakingModeSelect?.value || selectedSpeakingMode);
+  selectedDictationMode = normalizeDictationMode(dictationModeSelect?.value || selectedDictationMode);
   testModeSpeaking.classList.toggle('active-mode', mode === 'speaking');
   testModeDictation.classList.toggle('active-mode', mode === 'dictation');
+  speakingModeWrapper?.classList.toggle('hidden', mode !== 'speaking');
+  dictationModeWrapper?.classList.toggle('hidden', mode !== 'dictation');
 
   if (mode === 'speaking' && !isSpeechRecognitionSupported()) {
     testRecord.disabled = true;
@@ -396,18 +610,18 @@ function speakSpeakingPrompt(entry) {
     return;
   }
 
+  const promptText = getSpeakingPromptText(selectedSpeakingMode, entry);
+  if (!promptText) {
+    return;
+  }
+
   const synth = window.speechSynthesis;
   synth.cancel();
-  [entry.word, entry.word, entry.example].forEach((text, index) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.8;
-    utterance.pitch = 1;
-    if (index === 0) {
-      utterance.rate = 0.74;
-    }
-    synth.speak(utterance);
-  });
+  const utterance = new SpeechSynthesisUtterance(promptText);
+  utterance.lang = 'en-US';
+  utterance.rate = 0.8;
+  utterance.pitch = 1;
+  synth.speak(utterance);
 }
 
 function updateTestProgress() {
@@ -439,10 +653,11 @@ function updateTestDisplay() {
   }
 
   if (selectedTestMode === 'speaking') {
+    selectedSpeakingMode = normalizeSpeakingMode(speakingModeSelect?.value || selectedSpeakingMode);
     testModeLabel.textContent = 'Mode: Speaking Test';
     testStageLabel.textContent = 'Pronunciation';
-    testMeaning.textContent = 'Nghe từ rồi nói lại đúng như từ gốc.';
-    testExample.textContent = `Từ: ${currentEntry.word} • Ví dụ: ${currentEntry.example}`;
+    testMeaning.textContent = getSpeakingInstruction(selectedSpeakingMode);
+    testExample.textContent = `${getSpeakingPromptLabel(selectedSpeakingMode)}: ${getSpeakingPromptText(selectedSpeakingMode, currentEntry)}`;
     testInputLabel.textContent = 'Phản hồi';
     testAnswer.classList.add('hidden');
     testAnswer.disabled = false;
@@ -457,16 +672,17 @@ function updateTestDisplay() {
       testMessage.textContent = 'Trình duyệt không hỗ trợ Speech Recognition.';
     } else {
       testRecord.disabled = false;
-      testMessage.textContent = 'Nhấn 🔊 Listen để nghe từ rồi bấm 🎤 Record để ghi âm.';
+      testMessage.textContent = `Nhấn 🔊 Listen để nghe ${selectedSpeakingMode === 'example' ? 'câu ví dụ' : 'từ'} rồi bấm 🎤 Record để ghi âm.`;
     }
 
     speakSpeakingPrompt(currentEntry);
   } else {
+    selectedDictationMode = normalizeDictationMode(dictationModeSelect?.value || selectedDictationMode);
     testModeLabel.textContent = 'Mode: Dictation Test';
-    testStageLabel.textContent = dictationStage === 'word' ? 'Stage 1: Word' : dictationStage === 'sentence' ? 'Stage 2: Sentence' : 'Stage 3: IPA';
-    testMeaning.textContent = dictationStage === 'word' ? 'Nghe từ và nhập lại đúng chính tả.' : dictationStage === 'sentence' ? 'Nghe câu ví dụ và nhập lại nguyên câu.' : 'Nhập IPA của từ.';
-    testExample.textContent = dictationStage === 'word' ? 'Từ sẽ được đọc trước.' : dictationStage === 'sentence' ? 'Câu ví dụ sẽ được đọc trước.' : 'Ví dụ: /wɜːrk/.';
-    testInputLabel.textContent = dictationStage === 'word' ? 'Nhập từ' : dictationStage === 'sentence' ? 'Nhập câu ví dụ' : 'Nhập IPA';
+    testStageLabel.textContent = selectedDictationMode === 'example' ? 'Stage: Example' : 'Stage: Word';
+    testMeaning.textContent = getDictationInstruction(selectedDictationMode);
+    testExample.textContent = `${getDictationPromptLabel(selectedDictationMode)}: ${getDictationPromptText(selectedDictationMode, currentEntry)}`;
+    testInputLabel.textContent = selectedDictationMode === 'example' ? 'Nhập câu ví dụ' : 'Nhập từ';
     testAnswer.classList.remove('hidden');
     testAnswer.disabled = false;
     testAnswer.value = '';
@@ -474,12 +690,13 @@ function updateTestDisplay() {
     testSubmit.classList.remove('hidden');
     testNext.classList.add('hidden');
     testListen.classList.remove('hidden');
-    testMessage.textContent = dictationStage === 'word' ? 'Bấm 🔊 Listen để nghe từ.' : dictationStage === 'sentence' ? 'Bấm 🔊 Listen để nghe câu ví dụ.' : 'Nhập phiên âm nếu từ có IPA.';
+    testMessage.textContent = selectedDictationMode === 'example' ? 'Bấm 🔊 Listen để nghe câu ví dụ.' : 'Bấm 🔊 Listen để nghe từ.';
 
-    if (dictationStage === 'word') {
-      speakText(currentEntry.word);
-    } else if (dictationStage === 'sentence') {
+    dictationWrongAttempts = 0;
+    if (selectedDictationMode === 'example') {
       speakText(currentEntry.example);
+    } else {
+      speakText(currentEntry.word);
     }
     testTimeout(() => testAnswer.focus(), 120);
   }
@@ -488,6 +705,7 @@ function updateTestDisplay() {
 }
 
 function resetLearnSession() {
+  clearLearnSpellingAnimation();
   learnQueue = [];
   currentLearnIndex = 0;
   isHiddenWord = false;
@@ -501,6 +719,7 @@ function resetTestSession() {
   currentTestIndex = 0;
   testScore = 0;
   testWrong = 0;
+  dictationWrongAttempts = 0;
   dictationStage = 'word';
   testAnswer.value = '';
   testMessage.textContent = '';
@@ -532,6 +751,7 @@ function moveToNextLearnWord() {
   learnMessage.textContent = '';
   isHiddenWord = false;
   updateLearnDisplay();
+  speakLearnWord(learnQueue[currentLearnIndex]);
   learnAnswer.focus();
 }
 
@@ -581,6 +801,20 @@ function processLearnToggle() {
   updateLearnDisplay();
 }
 
+function replayLearnWord() {
+  const currentEntry = learnQueue[currentLearnIndex];
+  if (!currentEntry) {
+    return;
+  }
+
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+  clearLearnSpellingAnimation();
+  renderLearnWordDisplay(currentEntry, -1);
+  speakLearnWord(currentEntry);
+}
+
 function processTestListening() {
   const entry = testQueue[currentTestIndex];
   if (!entry) {
@@ -590,12 +824,12 @@ function processTestListening() {
   if (selectedTestMode === 'speaking') {
     speakSpeakingPrompt(entry);
     testMessage.textContent = 'Đang phát âm...';
-  } else if (dictationStage === 'word') {
-    speakText(entry.word);
-    testMessage.textContent = 'Đã phát âm từ.';
-  } else if (dictationStage === 'sentence') {
+  } else if (selectedDictationMode === 'example') {
     speakText(entry.example);
     testMessage.textContent = 'Đã phát âm câu ví dụ.';
+  } else {
+    speakText(entry.word);
+    testMessage.textContent = 'Đã phát âm từ.';
   }
 }
 
@@ -620,6 +854,9 @@ function processTestRecording() {
   if (testRecognition) {
     testRecognition.stop();
   }
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
 
   const recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
@@ -630,16 +867,18 @@ function processTestRecording() {
     const transcript = Array.from(event.results)
       .map((result) => result[0].transcript)
       .join(' ');
-    const expected = normalizeText(entry.word);
+    const expected = normalizeText(getSpeakingPromptText(selectedSpeakingMode, entry));
     const actual = normalizeText(transcript);
     const correct = actual === expected;
 
     if (correct) {
       testScore += 1;
       testMessage.textContent = '✅ Correct';
+      playCorrectSound();
     } else {
       testWrong += 1;
-      testMessage.textContent = `❌ Incorrect. Đáp án đúng: ${entry.word}`;
+      testMessage.textContent = `❌ Incorrect. Đáp án đúng: ${expected}`;
+      playWrongSound();
     }
 
     testNext.classList.remove('hidden');
@@ -676,48 +915,32 @@ function processTestSubmission() {
   let correct = false;
   let feedback = '';
 
-  if (dictationStage === 'word') {
-    correct = normalizeText(answer) === normalizeText(entry.word);
-    feedback = correct ? '✅ Correct' : `❌ Incorrect. Đáp án đúng: ${entry.word}`;
-  } else if (dictationStage === 'sentence') {
+  if (selectedDictationMode === 'example') {
     correct = normalizeText(answer) === normalizeText(entry.example);
-    feedback = correct ? '✅ Correct sentence' : `❌ Incorrect. Đáp án đúng: ${entry.example}`;
-  } else if (dictationStage === 'ipa') {
-    if (!entry.ipa) {
-      correct = true;
-      feedback = '✅ IPA không có sẵn cho từ này.';
-    } else {
-      correct = normalizeText(answer) === normalizeText(entry.ipa);
-      feedback = correct ? '✅ Correct IPA' : `❌ Wrong IPA. Đáp án đúng: ${entry.ipa}`;
-    }
+    feedback = correct ? '✅ Chính xác.' : '❌ Sai. Hãy thử lại.';
+  } else {
+    correct = normalizeText(answer) === normalizeText(entry.word);
+    feedback = correct ? '✅ Chính xác.' : '❌ Sai. Hãy thử lại.';
   }
 
   if (correct) {
     testScore += 1;
+    testMessage.textContent = feedback;
+    playCorrectSound();
+    testSubmit.classList.add('hidden');
+    testNext.classList.remove('hidden');
+    testAnswer.disabled = true;
   } else {
+    dictationWrongAttempts += 1;
     testWrong += 1;
+    testMessage.textContent = feedback;
+    playWrongSound();
+    testAnswer.focus();
   }
-
-  testMessage.textContent = feedback;
-  testSubmit.classList.add('hidden');
-  testNext.classList.remove('hidden');
-  testAnswer.disabled = true;
 }
 
 function proceedToNextTestQuestion() {
   if (selectedTestMode === 'dictation') {
-    if (dictationStage === 'word') {
-      dictationStage = 'sentence';
-      updateTestDisplay();
-      return;
-    }
-
-    if (dictationStage === 'sentence') {
-      dictationStage = 'ipa';
-      updateTestDisplay();
-      return;
-    }
-
     dictationStage = 'word';
   }
 
@@ -754,9 +977,11 @@ function startLearnSession() {
 
   currentLearnIndex = 0;
   isHiddenWord = false;
+  selectedLearnReadingMode = normalizeLearnReadingMode(learnReadingMode?.value || selectedLearnReadingMode);
   learnFeedback.textContent = '';
   setLearnSessionVisibility(true);
   updateLearnDisplay();
+  speakLearnWord(learnQueue[currentLearnIndex]);
   learnAnswer.value = '';
   testTimeout(() => learnAnswer.focus(), 120);
 }
@@ -777,6 +1002,7 @@ function startTestSession() {
   currentTestIndex = 0;
   testScore = 0;
   testWrong = 0;
+  dictationWrongAttempts = 0;
   dictationStage = 'word';
   testFeedback.textContent = '';
   setTestSessionVisibility(true);
@@ -789,9 +1015,84 @@ function startTestSession() {
   sessionActive = true;
 }
 
+function updateDuplicateStatus() {
+  const currentWord = inputWord.value.trim();
+  if (!currentWord) {
+    duplicateStatus.classList.add('hidden');
+    duplicateCard.classList.add('hidden');
+    duplicateStatus.textContent = '';
+    addSubmitButton.disabled = false;
+    return;
+  }
+
+  const duplicateEntry = findDuplicateVocabularyEntry(getVocabularySnapshot(), currentWord, editingWord || '');
+  if (duplicateEntry) {
+    duplicateStatus.classList.remove('hidden');
+    duplicateStatus.classList.add('is-duplicate');
+    duplicateStatus.classList.remove('is-new');
+    duplicateStatus.innerHTML = '<span class="duplicate-pill">⚠️ Từ này đã tồn tại trong bộ từ vựng</span>';
+    duplicateCard.classList.remove('hidden');
+    duplicateCard.innerHTML = `
+      <div class="duplicate-card-top">
+        <div>
+          <h4>${duplicateEntry.word}</h4>
+          <p>${duplicateEntry.topic} / ${duplicateEntry.subTopic}</p>
+        </div>
+        <div class="duplicate-actions">
+          <button type="button" class="secondary-button duplicate-action-button" id="duplicate-view">👁 Xem</button>
+          <button type="button" class="secondary-button duplicate-action-button" id="duplicate-edit">✏ Chỉnh sửa</button>
+        </div>
+      </div>
+      <div class="duplicate-card-details">
+        <p><strong>Meaning:</strong> ${duplicateEntry.meaning}</p>
+        <p><strong>Example:</strong> ${duplicateEntry.example}</p>
+        <p><strong>IPA:</strong> ${duplicateEntry.ipa || '—'}</p>
+      </div>
+    `;
+    duplicateCard.querySelector('#duplicate-view')?.addEventListener('click', () => scrollToWordCard(duplicateEntry.word));
+    duplicateCard.querySelector('#duplicate-edit')?.addEventListener('click', () => {
+      startEditMode(duplicateEntry);
+      showPage('add');
+    });
+    addSubmitButton.disabled = true;
+    return;
+  }
+
+  duplicateStatus.classList.remove('hidden');
+  duplicateStatus.classList.remove('is-duplicate');
+  duplicateStatus.classList.add('is-new');
+  duplicateStatus.innerHTML = '<span class="duplicate-pill duplicate-pill-new">🟢 New Word</span>';
+  duplicateCard.classList.add('hidden');
+  duplicateCard.innerHTML = '';
+  addSubmitButton.disabled = false;
+}
+
+function getVocabularySnapshot() {
+  if (!vocabulary.length) {
+    vocabulary = loadVocabulary();
+  }
+  return vocabulary;
+}
+
+function scrollToWordCard(word) {
+  const targetCard = Array.from(wordList.querySelectorAll('.word-item')).find((card) => normalizeWordKey(card.dataset.word) === normalizeWordKey(word));
+  if (!targetCard) {
+    return;
+  }
+
+  targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  targetCard.classList.add('is-highlighted');
+  if (duplicateHighlightTimer) {
+    window.clearTimeout(duplicateHighlightTimer);
+  }
+  duplicateHighlightTimer = window.setTimeout(() => {
+    targetCard.classList.remove('is-highlighted');
+  }, 2400);
+}
+
 function renderWordSuggestions() {
   const query = inputWord.value.trim();
-  const suggestions = filterWordSuggestions(loadVocabulary(), query, 10);
+  const suggestions = filterWordSuggestions(getVocabularySnapshot(), query, 10);
   wordSuggestionItems = suggestions;
 
   if (!query || !suggestions.length) {
@@ -834,6 +1135,7 @@ function selectSuggestion() {
 function startEditMode(entry) {
   editingWord = entry.word;
   addSubmitButton.textContent = 'Cập nhật';
+  addSubmitButton.disabled = false;
   addCancelButton.classList.remove('hidden');
   addFeedback.textContent = '';
 
@@ -848,6 +1150,7 @@ function startEditMode(entry) {
   inputIpa.value = entry.ipa || '';
   inputExample.value = entry.example || '';
   hideWordSuggestions();
+  updateDuplicateStatus();
   inputWord.focus();
 }
 
@@ -891,6 +1194,13 @@ function bindEvents() {
       ipa = await fetchWordIpa(word);
     }
 
+    const duplicateEntry = findDuplicateVocabularyEntry(getVocabularySnapshot(), word, editingWord || '');
+    if (duplicateEntry) {
+      addFeedback.textContent = 'Word already exists.';
+      updateDuplicateStatus();
+      return;
+    }
+
     try {
       if (editingWord) {
         updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, topic, subTopic });
@@ -917,10 +1227,12 @@ function bindEvents() {
   inputWord.addEventListener('input', () => {
     activeSuggestionIndex = -1;
     renderWordSuggestions();
+    updateDuplicateStatus();
   });
 
   inputWord.addEventListener('focus', () => {
     renderWordSuggestions();
+    updateDuplicateStatus();
   });
 
   inputWord.addEventListener('blur', () => {
@@ -1001,6 +1313,7 @@ function bindEvents() {
   });
 
   inputTopic.addEventListener('change', () => {
+    updateDuplicateStatus();
     if (inputTopic.value === ADD_TOPIC_VALUE) {
       const previousTopic = inputTopic.dataset.previousValue || DEFAULT_TOPIC;
       const newTopic = promptForNewTopic();
@@ -1022,6 +1335,7 @@ function bindEvents() {
   });
 
   inputSubtopic.addEventListener('change', () => {
+    updateDuplicateStatus();
     if (inputSubtopic.value === ADD_SUBTOPIC_VALUE) {
       const topicName = inputTopic.value === ADD_TOPIC_VALUE ? DEFAULT_TOPIC : inputTopic.value;
       const previousSubTopic = inputSubtopic.dataset.previousValue || DEFAULT_SUBTOPIC;
@@ -1054,10 +1368,18 @@ function bindEvents() {
     renderTestState();
   });
 
+  learnReadingMode?.addEventListener('change', () => {
+    selectedLearnReadingMode = normalizeLearnReadingMode(learnReadingMode.value);
+    if (sessionActive && learnQueue[currentLearnIndex]) {
+      speakLearnWord(learnQueue[currentLearnIndex]);
+    }
+  });
+
   learnStart.addEventListener('click', startLearnSession);
   learnCheck.addEventListener('click', processLearnCheck);
   learnKnown.addEventListener('click', processLearnKnown);
   learnToggle.addEventListener('click', processLearnToggle);
+  learnReplay.addEventListener('click', replayLearnWord);
 
   testModeSpeaking.addEventListener('click', () => setSelectedTestMode('speaking'));
   testModeDictation.addEventListener('click', () => setSelectedTestMode('dictation'));
@@ -1066,9 +1388,26 @@ function bindEvents() {
   testRecord.addEventListener('click', processTestRecording);
   testSubmit.addEventListener('click', processTestSubmission);
   testNext.addEventListener('click', proceedToNextTestQuestion);
+  soundToggle?.addEventListener('click', () => {
+    setSoundEnabled(!soundEnabled);
+  });
   testRestart.addEventListener('click', () => {
     resetTestSession();
     testFeedback.textContent = 'Bạn có thể bắt đầu lại test bất cứ lúc nào.';
+  });
+
+  speakingModeSelect?.addEventListener('change', () => {
+    selectedSpeakingMode = normalizeSpeakingMode(speakingModeSelect.value);
+    if (selectedTestMode === 'speaking' && testQueue[currentTestIndex]) {
+      updateTestDisplay();
+    }
+  });
+
+  dictationModeSelect?.addEventListener('change', () => {
+    selectedDictationMode = normalizeDictationMode(dictationModeSelect.value);
+    if (selectedTestMode === 'dictation' && testQueue[currentTestIndex]) {
+      updateTestDisplay();
+    }
   });
 
   document.addEventListener('keydown', (event) => {
@@ -1088,14 +1427,19 @@ function bindEvents() {
   });
 }
 
+
 function initializeApp() {
   bindEvents();
+  initializeAudio();
+  loadSoundSetting();
   refreshAddFormTopicList();
   refreshFilterControls();
   renderWordList();
   renderLearnSelection();
   renderTestState();
   setSelectedTestMode('');
+  speakingModeWrapper?.classList.add('hidden');
+  dictationModeWrapper?.classList.add('hidden');
   showPage('add');
 }
 
