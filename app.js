@@ -1,5 +1,7 @@
 import {
   addVocabularyEntry,
+  ensurePreferencesLoaded,
+  ensureVocabularyLoaded,
   findDuplicateVocabularyEntry,
   findVocabularyEntry,
   filterVocabularyByTopic,
@@ -8,6 +10,7 @@ import {
   loadSubTopics,
   loadTopics,
   loadVocabulary,
+  migrateLocalStorageToFirestore,
   removeVocabularyEntry,
   saveSubTopics,
   saveTopics,
@@ -28,6 +31,7 @@ import {
 } from './learn.js';
 import { buildTestQueue, filterWordSuggestions } from './test.js';
 import { playAudioFeedback } from './sound.js';
+import { loadSoundEnabled, saveSoundEnabled } from './storage.js';
 import {
   getDictationInstruction,
   getDictationPromptLabel,
@@ -152,10 +156,9 @@ function updateSoundToggleLabel() {
   soundToggle.textContent = `🔊 Sound: ${soundEnabled ? 'ON' : 'OFF'}`;
 }
 
-function loadSoundSetting() {
+async function loadSoundSetting() {
   try {
-    const storedValue = localStorage.getItem(SOUND_ENABLED_KEY);
-    soundEnabled = storedValue === null ? SOUND_ENABLED_DEFAULT : JSON.parse(storedValue);
+    soundEnabled = await loadSoundEnabled(SOUND_ENABLED_DEFAULT);
   } catch (error) {
     soundEnabled = SOUND_ENABLED_DEFAULT;
   }
@@ -164,7 +167,7 @@ function loadSoundSetting() {
 
 function setSoundEnabled(enabled) {
   soundEnabled = enabled;
-  localStorage.setItem(SOUND_ENABLED_KEY, JSON.stringify(soundEnabled));
+  void saveSoundEnabled(soundEnabled);
   updateSoundToggleLabel();
 }
 
@@ -352,7 +355,8 @@ function updateTestFilterSubtopics() {
   populateSelect(testSubtopicFilter, options, ALL_FILTER_VALUE);
 }
 
-function renderWordList() {
+async function renderWordList() {
+  await ensureVocabularyLoaded();
   const words = loadVocabulary();
   vocabulary = words;
   wordList.innerHTML = words.length
@@ -1428,10 +1432,21 @@ function bindEvents() {
 }
 
 
-function initializeApp() {
+async function initializeApp() {
   bindEvents();
   initializeAudio();
-  loadSoundSetting();
+  await migrateLocalStorageToFirestore();
+  await ensureVocabularyLoaded();
+  await ensurePreferencesLoaded();
+  await loadSoundSetting();
+  window.addEventListener('vocabulary-storage-updated', () => {
+    refreshAddFormTopicList();
+    refreshFilterControls();
+    renderWordList();
+    renderLearnSelection();
+    renderTestState();
+    updateDuplicateStatus();
+  });
   refreshAddFormTopicList();
   refreshFilterControls();
   renderWordList();
@@ -1443,4 +1458,4 @@ function initializeApp() {
   showPage('add');
 }
 
-initializeApp();
+void initializeApp();

@@ -1,55 +1,41 @@
-const STORAGE_KEY = 'vocabulary-trainer.words';
-const TOPICS_KEY = 'vocabulary-trainer.topics';
-const SUBTOPICS_KEY = 'vocabulary-trainer.subTopics';
+import { getDb } from './firebase.js';
+
 export const DEFAULT_TOPIC = 'General';
 export const DEFAULT_SUBTOPIC = 'Default';
 
-function parseList(raw, defaultValue) {
-  if (!raw) {
-    return defaultValue;
-  }
+const WORDS_COLLECTION = 'words';
+const PREFERENCES_COLLECTION = 'preferences';
+const SOUND_ENABLED_KEY = 'soundEnabled';
+const TOPICS_KEY = 'topics';
+const SUBTOPICS_KEY = 'subTopics';
 
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return defaultValue;
-    }
+let vocabularyCache = [];
+let topicsCache = [];
+let subTopicsCache = [];
+let firestoreInitialized = false;
+let firestoreSyncPromise = null;
+let preferencesSyncPromise = null;
+let soundPreferenceCache = true;
 
-    return parsed.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
-  } catch {
-    return defaultValue;
-  }
-}
-
-function parseObjectList(raw, defaultValue) {
-  if (!raw) {
-    return defaultValue;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return defaultValue;
-    }
-
-    return parsed
-      .filter(
-        (item) =>
-          item &&
-          typeof item === 'object' &&
-          typeof item.topic === 'string' &&
-          item.topic.trim() &&
-          typeof item.subTopic === 'string' &&
-          item.subTopic.trim(),
-      )
-      .map((item) => ({ topic: item.topic.trim(), subTopic: item.subTopic.trim() }));
-  } catch {
-    return defaultValue;
+function notifyVocabularyChange() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('vocabulary-storage-updated', { detail: [...vocabularyCache] }));
   }
 }
 
-function saveList(key, list) {
-  localStorage.setItem(key, JSON.stringify(list));
+async function getFirestoreHelpers() {
+  const [{ collection, deleteDoc, doc, getDocs, setDoc }] = await Promise.all([
+    import('https://www.gstatic.com/firebasejs/12.5.0/firebase-firestore.js'),
+  ]);
+  return { collection, deleteDoc, doc, getDocs, setDoc };
+}
+
+function deriveTopics(words) {
+  return [...new Set(words.map((entry) => entry.topic || DEFAULT_TOPIC))].filter(Boolean).sort();
+}
+
+function deriveSubTopics(words) {
+  return [...new Set(words.map((entry) => entry.subTopic || DEFAULT_SUBTOPIC))].filter(Boolean).sort();
 }
 
 function normalizeVocabularyEntry(entry) {
@@ -79,50 +65,82 @@ function normalizeVocabularyEntry(entry) {
 }
 
 function normalizeVocabularyList(words) {
-  return words.map(normalizeVocabularyEntry);
+  return (words || []).map(normalizeVocabularyEntry).filter((entry) => entry.word);
 }
 
-function shouldMigrateEntries(entries) {
-  return entries.some(
-    (entry) =>
-      !entry ||
-      typeof entry !== 'object' ||
-      !('topic' in entry) ||
-      !('subTopic' in entry) ||
-      !('ipa' in entry) ||
-      !('writeCount' in entry) ||
-      !('correct' in entry) ||
-      !('wrong' in entry) ||
-      !('learned' in entry),
-  );
+function updateDerivedCaches(words) {
+  vocabularyCache = normalizeVocabularyList(words);
+  topicsCache = deriveTopics(vocabularyCache);
+  subTopicsCache = deriveSubTopics(vocabularyCache);
+  if (!topicsCache.length) {
+    topicsCache = [DEFAULT_TOPIC];
+  }
+  if (!subTopicsCache.length) {
+    subTopicsCache = [DEFAULT_SUBTOPIC];
+  }
+}
+
+function toFirestorePayload(entry) {
+  return {
+    word: entry.word,
+    meaning: entry.meaning,
+    example: entry.example,
+    ipa: entry.ipa,
+    topic: entry.topic,
+    subTopic: entry.subTopic,
+    writeCount: entry.writeCount,
+    correct: entry.correct,
+    wrong: entry.wrong,
+    learned: entry.learned,
+  };
+}
+
+function getDocIdForEntry(entry, index) {
+  return normalizeWordKey(entry.word) || `word-${index + 1}`;
+}
+
+async function syncVocabularyFromFirestore() {
+  const db = await getDb();
+  if (!db) {
+    updateDerivedCaches([]);
+    notifyVocabularyChange();
+    return [];
+  }
+
+  const { collection, getDocs } = await getFirestoreHelpers();
+  const snapshot = await getDocs(collection(db, WORDS_COLLECTION));
+  const loadedEntries = snapshot.docs.map((docSnapshot) => normalizeVocabularyEntry(docSnapshot.data()));
+
+  updateDerivedCaches(loadedEntries);
+  firestoreInitialized = true;
+  notifyVocabularyChange();
+  return vocabularyCache;
+}
+
+export async function ensureVocabularyLoaded() {
+  if (firestoreInitialized) {
+    return vocabularyCache;
+  }
+
+  if (!firestoreSyncPromise) {
+    firestoreSyncPromise = syncVocabularyFromFirestore().catch((error) => {
+      console.error('Failed to load vocabulary from Firestore', error);
+      updateDerivedCaches([]);
+      notifyVocabularyChange();
+      return [];
+    });
+  }
+
+  return firestoreSyncPromise;
 }
 
 /**
- * Load vocabulary data from LocalStorage.
+ * Load vocabulary data from Firestore.
  * @returns {Array<Object>} Vocabulary list.
  */
 export function loadVocabulary() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    const entries = normalizeVocabularyList(parsed);
-    if (shouldMigrateEntries(parsed)) {
-      saveVocabulary(entries);
-    }
-
-    return entries;
-  } catch (error) {
-    console.error('Failed to parse storage data', error);
-    return [];
-  }
+  void ensureVocabularyLoaded();
+  return [...vocabularyCache];
 }
 
 export function normalizeWordKey(value) {
@@ -145,66 +163,340 @@ export function findDuplicateVocabularyEntry(words, candidateWord, currentWord =
   );
 }
 
-export function loadTopics() {
-  const storedTopics = parseList(localStorage.getItem(TOPICS_KEY), []);
-  if (storedTopics.length) {
-    return storedTopics;
+async function syncPreferencesFromFirestore() {
+  const db = await getDb();
+  if (!db) {
+    return { topics: [...topicsCache], subTopics: [...subTopicsCache], soundEnabled: soundPreferenceCache };
   }
 
-  const vocabularyTopics = [...new Set(loadVocabulary().map((entry) => entry.topic || DEFAULT_TOPIC))].filter(Boolean).sort();
-  return vocabularyTopics.length ? vocabularyTopics : [DEFAULT_TOPIC];
+  const { collection, getDocs } = await getFirestoreHelpers();
+  const snapshot = await getDocs(collection(db, PREFERENCES_COLLECTION));
+  const preferenceValues = Object.fromEntries(snapshot.docs.map((docSnapshot) => [docSnapshot.id, docSnapshot.data()]));
+
+  const storedTopics = Array.isArray(preferenceValues[TOPICS_KEY]?.value) ? preferenceValues[TOPICS_KEY].value : [];
+  topicsCache = storedTopics.length ? storedTopics : (vocabularyCache.length ? deriveTopics(vocabularyCache) : [DEFAULT_TOPIC]);
+
+  const storedSubTopics = Array.isArray(preferenceValues[SUBTOPICS_KEY]?.value) ? preferenceValues[SUBTOPICS_KEY].value : [];
+  subTopicsCache = storedSubTopics.length ? storedSubTopics : (vocabularyCache.length ? deriveSubTopics(vocabularyCache) : [DEFAULT_SUBTOPIC]);
+
+  const storedSoundValue = preferenceValues[SOUND_ENABLED_KEY]?.value;
+  soundPreferenceCache = typeof storedSoundValue === 'boolean' ? storedSoundValue : true;
+  return { topics: [...topicsCache], subTopics: [...subTopicsCache], soundEnabled: soundPreferenceCache };
+}
+
+export async function ensurePreferencesLoaded() {
+  if (preferencesSyncPromise) {
+    return preferencesSyncPromise;
+  }
+
+  preferencesSyncPromise = syncPreferencesFromFirestore().catch((error) => {
+    console.error('Failed to load preferences from Firestore', error);
+    return { topics: [...topicsCache], subTopics: [...subTopicsCache], soundEnabled: soundPreferenceCache };
+  });
+
+  return preferencesSyncPromise;
+}
+
+export async function migrateLocalStorageToFirestore() {
+  console.log('MIGRATE START');
+
+  try {
+    const db = await getDb();
+    if (!db) {
+      return false;
+    }
+
+    const { collection, getDocs, doc, setDoc } = await getFirestoreHelpers();
+    const [wordSnapshot, preferencesSnapshot] = await Promise.all([
+      getDocs(collection(db, WORDS_COLLECTION)),
+      getDocs(collection(db, PREFERENCES_COLLECTION)),
+    ]);
+
+    console.log('FIRESTORE SIZE', wordSnapshot.size, preferencesSnapshot.size);
+
+    const readParsedLocalStorageValue = (key) => {
+      if (typeof window === 'undefined' || !window.localStorage) {
+        return null;
+      }
+
+      try {
+        const rawValue = window.localStorage.getItem(key);
+        if (!rawValue) {
+          return null;
+        }
+        return JSON.parse(rawValue);
+      } catch (error) {
+        console.error('MIGRATE LOCAL STORAGE READ ERROR', { key, error });
+        return null;
+      }
+    };
+
+    const collectLocalStorageData = () => {
+      const collected = {
+        vocabulary: [],
+        topics: [],
+        subTopics: [],
+        soundEnabled: null,
+      };
+
+      if (typeof window === 'undefined' || !window.localStorage) {
+        return collected;
+      }
+
+      const seenWords = new Set();
+
+      const addWordsFromValue = (value) => {
+        if (Array.isArray(value)) {
+          value.forEach(addWordsFromValue);
+          return;
+        }
+
+        if (!value || typeof value !== 'object') {
+          return;
+        }
+
+        if (typeof value.word === 'string' && (typeof value.meaning === 'string' || typeof value.example === 'string' || typeof value.topic === 'string' || typeof value.subTopic === 'string' || typeof value.ipa === 'string')) {
+          const normalizedEntry = normalizeVocabularyEntry(value);
+          const normalizedWordKeyValue = normalizeWordKey(normalizedEntry.word);
+          if (normalizedWordKeyValue && !seenWords.has(normalizedWordKeyValue)) {
+            seenWords.add(normalizedWordKeyValue);
+            collected.vocabulary.push(normalizedEntry);
+          }
+        }
+
+        Object.values(value).forEach(addWordsFromValue);
+      };
+
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const storageKey = window.localStorage.key(index);
+        if (!storageKey) {
+          continue;
+        }
+
+        const parsedValue = readParsedLocalStorageValue(storageKey);
+        if (parsedValue === null) {
+          continue;
+        }
+
+        if (typeof parsedValue === 'boolean') {
+          if (storageKey.toLowerCase().includes('sound')) {
+            collected.soundEnabled = parsedValue;
+          }
+          continue;
+        }
+
+        if (Array.isArray(parsedValue) && parsedValue.every((item) => typeof item === 'string')) {
+          const storageKeyLower = storageKey.toLowerCase();
+          if (storageKeyLower.includes('sub')) {
+            collected.subTopics.push(...parsedValue);
+          } else if (storageKeyLower.includes('topic')) {
+            collected.topics.push(...parsedValue);
+          }
+        }
+
+        if (parsedValue && typeof parsedValue === 'object') {
+          const objectValue = parsedValue;
+          const topicValues = Array.isArray(objectValue.topics) ? objectValue.topics : [];
+          const subTopicValues = Array.isArray(objectValue.subTopics) ? objectValue.subTopics : [];
+          const subtopicValues = Array.isArray(objectValue.subtopics) ? objectValue.subtopics : [];
+          const soundValue = objectValue.soundEnabled;
+          if (typeof soundValue === 'boolean') {
+            collected.soundEnabled = soundValue;
+          }
+          if (topicValues.length) {
+            collected.topics.push(...topicValues);
+          }
+          if (subTopicValues.length) {
+            collected.subTopics.push(...subTopicValues);
+          }
+          if (subtopicValues.length) {
+            collected.subTopics.push(...subtopicValues);
+          }
+          if (Array.isArray(objectValue.words)) {
+            addWordsFromValue(objectValue.words);
+          }
+          if (Array.isArray(objectValue.vocabulary)) {
+            addWordsFromValue(objectValue.vocabulary);
+          }
+          if (Array.isArray(objectValue.entries)) {
+            addWordsFromValue(objectValue.entries);
+          }
+        }
+
+        addWordsFromValue(parsedValue);
+      }
+
+      collected.vocabulary = collected.vocabulary.filter((entry) => entry.word);
+      collected.topics = [...new Set(collected.topics.map((topic) => String(topic).trim()).filter(Boolean))];
+      collected.subTopics = [...new Set(collected.subTopics.map((subTopic) => String(subTopic).trim()).filter(Boolean))];
+      if (typeof collected.soundEnabled !== 'boolean') {
+        collected.soundEnabled = null;
+      }
+      return collected;
+    };
+
+    const localData = collectLocalStorageData();
+    console.log('LOCAL DATA', localData);
+
+    const firestoreWords = wordSnapshot.docs.map((docSnapshot) => normalizeVocabularyEntry(docSnapshot.data()));
+    const firestoreWordKeys = new Set(firestoreWords.map((entry) => normalizeWordKey(entry.word)));
+    const mergedWords = [...firestoreWords];
+    const mergedWordKeys = new Set(firestoreWordKeys);
+    const missingWords = [];
+
+    localData.vocabulary.forEach((entry) => {
+      const normalizedWordKeyValue = normalizeWordKey(entry.word);
+      if (!normalizedWordKeyValue || mergedWordKeys.has(normalizedWordKeyValue)) {
+        return;
+      }
+      mergedWordKeys.add(normalizedWordKeyValue);
+      mergedWords.push(entry);
+      missingWords.push(entry);
+    });
+
+    const firestorePreferenceValues = Object.fromEntries(preferencesSnapshot.docs.map((docSnapshot) => [docSnapshot.id, docSnapshot.data()]));
+    const existingTopics = Array.isArray(firestorePreferenceValues[TOPICS_KEY]?.value) ? firestorePreferenceValues[TOPICS_KEY].value : [];
+    const existingSubTopics = Array.isArray(firestorePreferenceValues[SUBTOPICS_KEY]?.value) ? firestorePreferenceValues[SUBTOPICS_KEY].value : [];
+    const existingSoundValue = firestorePreferenceValues[SOUND_ENABLED_KEY]?.value;
+    const nextTopics = [...new Set([...existingTopics, ...localData.topics].map((topic) => String(topic).trim()).filter(Boolean))];
+    const nextSubTopics = [...new Set([...existingSubTopics, ...localData.subTopics].map((subTopic) => String(subTopic).trim()).filter(Boolean))];
+    const nextSoundEnabled = typeof existingSoundValue === 'boolean' ? existingSoundValue : (typeof localData.soundEnabled === 'boolean' ? localData.soundEnabled : true);
+
+    for (const entry of missingWords) {
+      const docId = getDocIdForEntry(entry, missingWords.indexOf(entry));
+      const data = toFirestorePayload(entry);
+      console.log('UPLOAD', docId, data);
+      await setDoc(doc(db, WORDS_COLLECTION, docId), data);
+    }
+
+    if (nextTopics.length) {
+      const data = { value: nextTopics };
+      console.log('UPLOAD', TOPICS_KEY, data);
+      await setDoc(doc(db, PREFERENCES_COLLECTION, TOPICS_KEY), data);
+    }
+    if (nextSubTopics.length) {
+      const data = { value: nextSubTopics };
+      console.log('UPLOAD', SUBTOPICS_KEY, data);
+      await setDoc(doc(db, PREFERENCES_COLLECTION, SUBTOPICS_KEY), data);
+    }
+    if (typeof existingSoundValue !== 'boolean' && typeof localData.soundEnabled === 'boolean') {
+      const soundData = { value: localData.soundEnabled };
+      console.log('UPLOAD', SOUND_ENABLED_KEY, soundData);
+      await setDoc(doc(db, PREFERENCES_COLLECTION, SOUND_ENABLED_KEY), soundData);
+    }
+
+    console.log('UPLOAD DONE');
+
+    updateDerivedCaches(mergedWords);
+    topicsCache = nextTopics.length ? nextTopics : topicsCache;
+    subTopicsCache = nextSubTopics.length ? nextSubTopics : subTopicsCache;
+    soundPreferenceCache = nextSoundEnabled;
+    firestoreInitialized = false;
+    firestoreSyncPromise = null;
+    preferencesSyncPromise = null;
+    notifyVocabularyChange();
+    return true;
+  } catch (error) {
+    console.error('MIGRATE FAILED', error);
+    console.error('MIGRATE FAILED DETAILS', { error, message: error?.message, stack: error?.stack });
+    return false;
+  }
+}
+
+export async function loadSoundEnabled(defaultValue = true) {
+  const preferences = await ensurePreferencesLoaded();
+  return typeof preferences?.soundEnabled === 'boolean' ? preferences.soundEnabled : defaultValue;
+}
+
+export function saveSoundEnabled(enabled) {
+  soundPreferenceCache = Boolean(enabled);
+  void (async () => {
+    const db = await getDb();
+    if (!db) {
+      return;
+    }
+    const { doc, setDoc } = await getFirestoreHelpers();
+    await setDoc(doc(db, PREFERENCES_COLLECTION, SOUND_ENABLED_KEY), { value: soundPreferenceCache });
+  })();
+}
+
+export function loadTopics() {
+  void ensureVocabularyLoaded();
+  void ensurePreferencesLoaded();
+  return [...topicsCache];
 }
 
 export function saveTopics(topics) {
-  const nextTopics = [...new Set(topics.map((topic) => topic.trim()))].filter(Boolean);
-  saveList(TOPICS_KEY, nextTopics);
+  const nextTopics = [...new Set((topics || []).map((topic) => String(topic).trim()).filter(Boolean))];
+  topicsCache = nextTopics.length ? nextTopics : [DEFAULT_TOPIC];
+  void (async () => {
+    const db = await getDb();
+    if (!db) {
+      return;
+    }
+    const { doc, setDoc } = await getFirestoreHelpers();
+    await setDoc(doc(db, PREFERENCES_COLLECTION, TOPICS_KEY), { value: [...topicsCache] });
+  })();
 }
 
 export function loadSubTopics(topic) {
-  const allSubTopics = parseList(localStorage.getItem(SUBTOPICS_KEY), []);
+  void ensureVocabularyLoaded();
+  void ensurePreferencesLoaded();
   if (!topic) {
-    const globalSubTopics = allSubTopics.length
-      ? [...new Set(allSubTopics.map((stored) => (stored.includes('::') ? stored.split('::')[1] : stored)))].sort()
-      : [];
-    if (globalSubTopics.length) {
-      return globalSubTopics;
-    }
-
-    const vocabularySubTopics = [...new Set(loadVocabulary().map((entry) => entry.subTopic || DEFAULT_SUBTOPIC))].filter(Boolean).sort();
-    return vocabularySubTopics.length ? vocabularySubTopics : [DEFAULT_SUBTOPIC];
+    return [...subTopicsCache];
   }
 
-  const topicSubTopics = allSubTopics
-    .filter((subTopic) => subTopic.startsWith(`${topic}::`))
-    .map((subTopic) => subTopic.replace(`${topic}::`, ''));
-
-  if (topicSubTopics.length) {
-    return topicSubTopics;
-  }
-
-  const vocabularySubTopics = [...new Set(loadVocabulary().filter((entry) => entry.topic === topic).map((entry) => entry.subTopic || DEFAULT_SUBTOPIC))]
-    .filter(Boolean)
-    .sort();
-  return vocabularySubTopics.length ? vocabularySubTopics : [DEFAULT_SUBTOPIC];
+  const topicSubTopics = vocabularyCache.filter((entry) => entry.topic === topic).map((entry) => entry.subTopic || DEFAULT_SUBTOPIC);
+  return [...new Set(topicSubTopics)].filter(Boolean).sort();
 }
 
 export function saveSubTopics(subTopics, topic) {
-  const existingSubTopics = parseList(localStorage.getItem(SUBTOPICS_KEY), []);
-  const topicPrefix = topic ? `${topic}::` : '';
-  const nextSubTopicsForTopic = subTopics.map((subTopic) => `${topicPrefix}${subTopic.trim()}`);
-  const preservedSubTopics = existingSubTopics.filter((stored) => {
-    return topic ? !stored.startsWith(topicPrefix) : true;
-  });
-  const uniqueSubTopics = [...new Set([...preservedSubTopics, ...nextSubTopicsForTopic])].filter(Boolean);
-  saveList(SUBTOPICS_KEY, uniqueSubTopics);
+  const nextSubTopics = [...new Set((subTopics || []).map((subTopic) => String(subTopic).trim()).filter(Boolean))];
+  if (topic) {
+    const existingForOtherTopics = subTopicsCache.filter((stored) => !stored.startsWith(`${topic}::`));
+    subTopicsCache = [...existingForOtherTopics, ...nextSubTopics.map((subTopic) => `${topic}::${subTopic}`)];
+  } else {
+    subTopicsCache = nextSubTopics.length ? nextSubTopics : [DEFAULT_SUBTOPIC];
+  }
+  void (async () => {
+    const db = await getDb();
+    if (!db) {
+      return;
+    }
+    const { doc, setDoc } = await getFirestoreHelpers();
+    await setDoc(doc(db, PREFERENCES_COLLECTION, SUBTOPICS_KEY), { value: [...subTopicsCache] });
+  })();
 }
 
 /**
- * Persist vocabulary list to LocalStorage.
+ * Persist vocabulary list to Firestore.
  * @param {Array<Object>} words
  */
 export function saveVocabulary(words) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(words));
+  const normalized = normalizeVocabularyList(words);
+  updateDerivedCaches(normalized);
+  notifyVocabularyChange();
+
+  return (async () => {
+    const db = await getDb();
+    if (!db) {
+      return normalized;
+    }
+
+    const { collection, deleteDoc, doc, getDocs, setDoc } = await getFirestoreHelpers();
+    const existingSnapshot = await getDocs(collection(db, WORDS_COLLECTION));
+    await Promise.all(existingSnapshot.docs.map((docSnapshot) => deleteDoc(doc(db, WORDS_COLLECTION, docSnapshot.id))));
+
+    await Promise.all(
+      normalized.map((entry, index) => {
+        const docId = getDocIdForEntry(entry, index);
+        return setDoc(doc(db, WORDS_COLLECTION, docId), toFirestorePayload(entry));
+      }),
+    );
+
+    firestoreInitialized = true;
+    return normalized;
+  })();
 }
 
 /**
@@ -226,12 +518,12 @@ export function createVocabularyEntry(
   subTopic = DEFAULT_SUBTOPIC,
 ) {
   return {
-    word: word.trim(),
-    meaning: meaning.trim(),
-    example: example.trim(),
-    ipa: ipa.trim(),
-    topic: topic.trim() || DEFAULT_TOPIC,
-    subTopic: subTopic.trim() || DEFAULT_SUBTOPIC,
+    word: String(word || '').trim(),
+    meaning: String(meaning || '').trim(),
+    example: String(example || '').trim(),
+    ipa: String(ipa || '').trim(),
+    topic: String(topic || '').trim() || DEFAULT_TOPIC,
+    subTopic: String(subTopic || '').trim() || DEFAULT_SUBTOPIC,
     writeCount: 0,
     correct: 0,
     wrong: 0,
@@ -246,22 +538,15 @@ export function createVocabularyEntry(
  */
 export function addVocabularyEntry(entry) {
   const words = loadVocabulary();
-  const exists = words.some((item) => item.word.toLowerCase() === entry.word.toLowerCase());
+  const normalizedEntry = createVocabularyEntry(entry.word, entry.meaning, entry.example, entry.ipa, entry.topic, entry.subTopic);
+  const exists = words.some((item) => normalizeWordKey(item.word) === normalizeWordKey(normalizedEntry.word));
   if (exists) {
     throw new Error('Từ này đã tồn tại.');
   }
 
-  const newEntry = createVocabularyEntry(
-    entry.word,
-    entry.meaning,
-    entry.example,
-    entry.ipa,
-    entry.topic,
-    entry.subTopic,
-  );
-  words.unshift(newEntry);
-  saveVocabulary(words);
-  return newEntry;
+  const nextWords = [normalizedEntry, ...words];
+  void saveVocabulary(nextWords);
+  return normalizedEntry;
 }
 
 /**
@@ -269,8 +554,8 @@ export function addVocabularyEntry(entry) {
  * @param {string} word
  */
 export function removeVocabularyEntry(word) {
-  const words = loadVocabulary().filter((item) => item.word.toLowerCase() !== word.toLowerCase());
-  saveVocabulary(words);
+  const words = loadVocabulary().filter((item) => normalizeWordKey(item.word) !== normalizeWordKey(word));
+  void saveVocabulary(words);
 }
 
 /**
@@ -281,11 +566,11 @@ export function removeVocabularyEntry(word) {
  */
 export function updateVocabularyEntryByWord(originalWord, updates) {
   const words = loadVocabulary();
-  const normalizedOriginalWord = (originalWord || '').trim().toLowerCase();
+  const normalizedOriginalWord = normalizeWordKey(originalWord);
   const nextWord = (updates?.word || '').trim();
 
   if (nextWord) {
-    const duplicate = words.find((item) => item.word.toLowerCase() !== normalizedOriginalWord && item.word.toLowerCase() === nextWord.toLowerCase());
+    const duplicate = words.find((item) => normalizeWordKey(item.word) !== normalizedOriginalWord && normalizeWordKey(item.word) === normalizeWordKey(nextWord));
     if (duplicate) {
       throw new Error('Từ này đã tồn tại.');
     }
@@ -293,7 +578,7 @@ export function updateVocabularyEntryByWord(originalWord, updates) {
 
   let updated = null;
   const newWords = words.map((item) => {
-    if (item.word.toLowerCase() !== normalizedOriginalWord) {
+    if (normalizeWordKey(item.word) !== normalizedOriginalWord) {
       return item;
     }
 
@@ -301,7 +586,7 @@ export function updateVocabularyEntryByWord(originalWord, updates) {
     return updated;
   });
 
-  saveVocabulary(newWords);
+  void saveVocabulary(newWords);
   return updated;
 }
 
@@ -315,13 +600,13 @@ export function updateVocabularyEntry(word, updates) {
   const words = loadVocabulary();
   let updated = null;
   const newWords = words.map((item) => {
-    if (item.word.toLowerCase() !== word.toLowerCase()) {
+    if (normalizeWordKey(item.word) !== normalizeWordKey(word)) {
       return item;
     }
-    updated = { ...item, ...updates };
+    updated = normalizeVocabularyEntry({ ...item, ...updates });
     return updated;
   });
-  saveVocabulary(newWords);
+  void saveVocabulary(newWords);
   return updated;
 }
 
@@ -331,7 +616,7 @@ export function updateVocabularyEntry(word, updates) {
  * @returns {Object|undefined}
  */
 export function findVocabularyEntry(word) {
-  return loadVocabulary().find((item) => item.word.toLowerCase() === word.toLowerCase());
+  return loadVocabulary().find((item) => normalizeWordKey(item.word) === normalizeWordKey(word));
 }
 
 /**
@@ -371,3 +656,5 @@ export function filterVocabularyByTopic(words, topic, subTopic) {
     return matchesTopic && matchesSubTopic;
   });
 }
+
+void ensureVocabularyLoaded();
