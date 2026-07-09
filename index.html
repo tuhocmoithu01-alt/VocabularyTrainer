@@ -13,7 +13,7 @@
         <span class="brand-icon">📚</span>
         <div>
           <h1>Vocabulary Trainer</h1>
-          <p>Học từ vựng tiếng Anh bằng LocalStorage</p>
+          <p>Học từ vựng tiếng Anh bằng Firestore</p>
         </div>
       </div>
       <nav class="menu-bar" aria-label="Main menu">
@@ -34,19 +34,38 @@
           </div>
 
           <form id="add-form" class="form-grid" autocomplete="off">
+            <div class="field-card field-card-with-actions">
+              <label>
+                <span>Topic</span>
+                <select id="input-topic" name="topic"></select>
+              </label>
+              <div class="select-actions">
+                <button type="button" id="rename-topic" class="icon-button" aria-label="Rename topic">✏️</button>
+                <button type="button" id="delete-topic" class="icon-button" aria-label="Delete topic">🗑</button>
+              </div>
+            </div>
+            <div class="field-card field-card-with-actions">
+              <label>
+                <span>Sub Topic</span>
+                <select id="input-subtopic" name="subTopic"></select>
+              </label>
+              <div class="select-actions">
+                <button type="button" id="rename-subtopic" class="icon-button" aria-label="Rename sub topic">✏️</button>
+                <button type="button" id="delete-subtopic" class="icon-button" aria-label="Delete sub topic">🗑</button>
+              </div>
+            </div>
             <label>
-              <span>Topic</span>
-              <select id="input-topic" name="topic"></select>
+              <span>Type</span>
+              <select id="input-type" name="type">
+                <option value="Word" selected>Word</option>
+                <option value="Phrase">Phrase</option>
+              </select>
             </label>
             <label>
-              <span>Sub Topic</span>
-              <select id="input-subtopic" name="subTopic"></select>
-            </label>
-            <label>
-              <span>Word</span>
+              <span>Term</span>
               <div class="word-input-wrapper">
                 <input type="text" id="input-word" name="word" required autocomplete="off" />
-                <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Word suggestions"></ul>
+                <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Term suggestions"></ul>
               </div>
               <div id="duplicate-status" class="duplicate-status hidden" aria-live="polite"></div>
               <div id="duplicate-card" class="duplicate-card hidden"></div>
@@ -76,6 +95,25 @@
             <div>
               <h2>Danh sách từ</h2>
               <p>Quản lý từ vựng đã lưu trong trình duyệt.</p>
+            </div>
+            <div class="field-card">
+              <label>
+                <span>Sort By</span>
+                <select id="sort-by">
+                  <option value="alphabet" selected>A–Z</option>
+                  <option value="topic">By Topic</option>
+                </select>
+              </label>
+            </div>
+            <div class="field-card">
+              <label>
+                <span>Type</span>
+                <select id="filter-type">
+                  <option value="" selected>All</option>
+                  <option value="Word">Word</option>
+                  <option value="Phrase">Phrase</option>
+                </select>
+              </label>
             </div>
           </div>
           <div id="word-list" class="word-list"></div>

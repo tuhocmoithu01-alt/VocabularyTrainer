@@ -150,6 +150,36 @@ select {
   gap: 10px;
 }
 
+.field-card-with-actions {
+  display: grid;
+  gap: 10px;
+  align-items: center;
+}
+
+.select-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.icon-button {
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface-strong);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.icon-button:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.icon-button:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.6);
+}
+
 #speaking-mode-wrapper {
   margin-top: 4px;
 }
