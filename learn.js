@@ -57,13 +57,15 @@ export function toggleWordVisibility(currentState) {
   return !currentState;
 }
 
+import { getMeaningDisplayValue } from './language-config.js';
+
 /**
  * Build a plain label for a learn queue item.
  * @param {Object} entry
  * @returns {string}
  */
 export function formatLearnLabel(entry) {
-  return `${entry.word} — ${entry.meaning}`;
+  return `${entry.word} — ${getMeaningDisplayValue(entry)}`;
 }
 
 /**

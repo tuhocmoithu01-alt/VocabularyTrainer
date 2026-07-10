@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getSpellingProgressSteps, getSpellingSequence, normalizeLearnReadingMode } from '../learn.js';
+import { formatLearnLabel, getSpellingProgressSteps, getSpellingSequence, normalizeLearnReadingMode } from '../learn.js';
 
 test('normalizeLearnReadingMode defaults to normal and accepts spelling', () => {
   assert.equal(normalizeLearnReadingMode('spelling'), 'spelling');
@@ -17,4 +17,8 @@ test('getSpellingSequence returns one character per letter in order', () => {
 test('getSpellingProgressSteps returns progressive prefixes for highlight animation', () => {
   assert.deepEqual(getSpellingProgressSteps('hello'), ['H', 'HE', 'HEL', 'HELL', 'HELLO']);
   assert.deepEqual(getSpellingProgressSteps('company'), ['C', 'CO', 'COM', 'COMP', 'COMPA', 'COMPAN', 'COMPANY']);
+});
+
+test('formatLearnLabel uses the stored meaning value for display', () => {
+  assert.equal(formatLearnLabel({ word: 'eat', meanings: { vietnamese: 'ăn', english: 'to eat' } }), 'eat — ăn');
 });

@@ -25,6 +25,8 @@ import {
   DEFAULT_TYPE,
   normalizeWordKey,
 } from './storage.js';
+import { getCurrentLanguage, getLanguageLabel, getLanguageOptions, setCurrentLanguage } from './language-manager.js';
+import { buildMeaningMap, getCurrentMeaningLanguage, getDisplayConfig, getMeaningDisplayValue, getMeaningLanguageOptions, getMeaningValue, setCurrentMeaningLanguage } from './language-config.js';
 import { fetchWordIpa } from './dictionary.js';
 import {
   buildLearnQueue,
@@ -45,6 +47,7 @@ import {
   isSpeechRecognitionSupported,
   requestMicrophoneAccess,
 } from './speech-recognition.js';
+import { createSpeechUtterance, getSpeechLanguageCode } from './speech.js';
 import {
   getDictationInstruction,
   getDictationPromptLabel,
@@ -58,6 +61,7 @@ import {
 
 const ADD_TOPIC_VALUE = '__add_topic__';
 const ADD_SUBTOPIC_VALUE = '__add_subtopic__';
+const SUBTOPIC_NOT_SELECTED_VALUE = '__not_selected__';
 const ALL_FILTER_VALUE = '';
 
 const pageButtons = document.querySelectorAll('.menu-button');
@@ -128,6 +132,9 @@ const speakingModeSelect = document.getElementById('speaking-mode-select');
 const dictationModeWrapper = document.getElementById('dictation-mode-wrapper');
 const dictationModeSelect = document.getElementById('dictation-mode-select');
 const soundToggle = document.getElementById('sound-toggle');
+const languageSelect = document.getElementById('language-select');
+const languageLabel = document.getElementById('language-label');
+const meaningLanguageSelect = document.getElementById('meaning-language-select');
 
 // ===== SOUND SETTINGS =====
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -220,17 +227,23 @@ function showPage(pageName) {
   pageButtons.forEach((button) => button.classList.toggle('active', button.dataset.page === pageName));
 }
 
-function resetAddForm() {
-  addForm.reset();
-  inputType.value = DEFAULT_TYPE;
+function clearAddFormInputFields() {
+  inputWord.value = '';
+  inputMeaning.value = '';
+  inputIpa.value = '';
+  inputExample.value = '';
   editingWord = null;
+  addFeedback.textContent = '';
+  hideWordSuggestions();
+  updateDuplicateStatus();
+}
+
+function resetAddForm() {
+  // Clear only input fields, preserve Topic/SubTopic/Type selections
+  clearAddFormInputFields();
   addSubmitButton.textContent = 'Lưu từ';
   addSubmitButton.disabled = false;
   addCancelButton.classList.add('hidden');
-  addFeedback.textContent = '';
-  refreshAddFormTopicList(DEFAULT_TOPIC);
-  hideWordSuggestions();
-  updateDuplicateStatus();
 }
 
 function buildSelectOptions(items, includeAll = false, includeAdd = false) {
@@ -377,6 +390,16 @@ function refreshAddFormSubtopicList(topic, selectedSubtopic = DEFAULT_SUBTOPIC) 
   populateSelect(inputSubtopic, subtopicOptions, selectedSubtopic);
 }
 
+function loadAddFormSubtopicListNotSelected(topic) {
+  const subTopics = getStoredSubTopics(topic);
+  const subtopicOptions = [
+    { value: SUBTOPIC_NOT_SELECTED_VALUE, label: 'Vui lòng chọn Sub Topic' }
+  ].concat(
+    subTopics.map((sub) => ({ value: sub, label: sub }))
+  ).concat([{ value: ADD_SUBTOPIC_VALUE, label: '+ Add Sub Topic' }]);
+  populateSelect(inputSubtopic, subtopicOptions, SUBTOPIC_NOT_SELECTED_VALUE);
+}
+
 function refreshFilterControls() {
   const topics = getStoredTopics();
   const topicOptions = buildSelectOptions(topics, true, false);
@@ -416,7 +439,89 @@ async function renderWordList() {
   wordList.innerHTML = html;
 }
 
+function renderLanguageSelector() {
+  if (!languageSelect) {
+    return;
+  }
+
+  const options = getLanguageOptions();
+  languageSelect.innerHTML = options
+    .map((language) => `<option value="${language.code}" ${language.code === getCurrentLanguage() ? 'selected' : ''}>${language.flag} ${language.label}</option>`)
+    .join('');
+  languageSelect.value = getCurrentLanguage();
+  if (languageLabel) {
+    languageLabel.textContent = `Ngôn ngữ học: ${getLanguageLabel(getCurrentLanguage())}`;
+  }
+}
+
+function renderMeaningLanguageSelector() {
+  if (!meaningLanguageSelect) {
+    return;
+  }
+
+  const options = getMeaningLanguageOptions();
+  meaningLanguageSelect.innerHTML = options
+    .map((language) => `<option value="${language.code}" ${language.code === getCurrentMeaningLanguage() ? 'selected' : ''}>${language.flag} ${language.label}</option>`)
+    .join('');
+  meaningLanguageSelect.value = getCurrentMeaningLanguage();
+}
+
+function getActiveDisplayConfig() {
+  return getDisplayConfig(getCurrentLanguage(), getCurrentMeaningLanguage());
+}
+
+function updateDynamicLabels() {
+  const config = getActiveDisplayConfig();
+  const termLabel = document.querySelector('[data-field-label="term"]');
+  const pronunciationLabel = document.querySelector('[data-field-label="pronunciation"]');
+  const meaningLabel = document.querySelector('[data-field-label="meaning"]');
+  const exampleLabel = document.querySelector('[data-field-label="example"]');
+  const learnTermLabel = document.querySelector('[data-display-label="term"]');
+  const learnMeaningLabel = document.querySelector('[data-display-label="meaning"]');
+  const learnExampleLabel = document.querySelector('[data-display-label="example"]');
+  const termInput = document.getElementById('input-word');
+  const meaningInput = document.getElementById('input-meaning');
+  const pronunciationInput = document.getElementById('input-ipa');
+  const exampleInput = document.getElementById('input-example');
+
+  if (termLabel) {
+    termLabel.textContent = config.termLabel;
+  }
+  if (pronunciationLabel) {
+    pronunciationLabel.textContent = config.pronunciationLabel;
+  }
+  if (meaningLabel) {
+    meaningLabel.textContent = config.meaningLabel;
+  }
+  if (exampleLabel) {
+    exampleLabel.textContent = config.exampleLabel;
+  }
+  if (learnTermLabel) {
+    learnTermLabel.textContent = config.termLabel;
+  }
+  if (learnMeaningLabel) {
+    learnMeaningLabel.textContent = config.meaningLabel;
+  }
+  if (learnExampleLabel) {
+    learnExampleLabel.textContent = config.exampleLabel;
+  }
+  if (termInput) {
+    termInput.placeholder = config.termHint || '';
+  }
+  if (meaningInput) {
+    meaningInput.placeholder = config.meaningPlaceholder || '';
+  }
+  if (pronunciationInput) {
+    pronunciationInput.placeholder = config.pronunciationPlaceholder || '';
+  }
+  if (exampleInput) {
+    exampleInput.placeholder = config.exampleHint || '';
+  }
+}
+
 function renderWordCard(entry) {
+  const config = getActiveDisplayConfig();
+  const meaningValue = getMeaningDisplayValue(entry, getCurrentMeaningLanguage());
   return `
     <div class="word-item" data-word="${entry.word}" data-doc-id="${entry.docId || ''}">
       <div>
@@ -424,9 +529,9 @@ function renderWordCard(entry) {
         <p><strong>Type:</strong> ${entry.type || DEFAULT_TYPE}</p>
         <p><strong>Topic:</strong> ${entry.topic}</p>
         <p><strong>Sub Topic:</strong> ${entry.subTopic}</p>
-        <p><strong>Meaning:</strong> ${entry.meaning}</p>
-        <p><strong>Example:</strong> ${entry.example}</p>
-        <p><strong>IPA:</strong> ${entry.ipa || '—'}</p>
+        <p><strong>${config.meaningLabel}:</strong> ${meaningValue}</p>
+        <p><strong>${config.exampleLabel}:</strong> ${entry.example}</p>
+        <p><strong>${config.pronunciationLabel}:</strong> ${entry.ipa || entry.pronunciation || '—'}</p>
         <p><strong>Trạng thái:</strong> ${entry.learned ? 'Đã thuộc' : 'Chưa thuộc'}</p>
       </div>
       <div class="word-actions">
@@ -469,45 +574,59 @@ function renderWordListByTopic(words) {
   }
 
   const sortedWords = [...words].sort((first, second) => {
-    const topicComparison = first.topic.localeCompare(second.topic, undefined, { sensitivity: 'base' });
+    const categoryComparison = (first.category || first.topic || DEFAULT_TOPIC).localeCompare(second.category || second.topic || DEFAULT_TOPIC, undefined, { sensitivity: 'base' });
+    if (categoryComparison !== 0) {
+      return categoryComparison;
+    }
+    const topicComparison = (first.topic || DEFAULT_TOPIC).localeCompare(second.topic || DEFAULT_TOPIC, undefined, { sensitivity: 'base' });
     if (topicComparison !== 0) {
       return topicComparison;
     }
-    const subTopicComparison = first.subTopic.localeCompare(second.subTopic, undefined, { sensitivity: 'base' });
+    const subTopicComparison = (first.subTopic || DEFAULT_SUBTOPIC).localeCompare(second.subTopic || DEFAULT_SUBTOPIC, undefined, { sensitivity: 'base' });
     if (subTopicComparison !== 0) {
       return subTopicComparison;
     }
     return first.word.localeCompare(second.word, undefined, { sensitivity: 'base' });
   });
 
-  const groupedByTopic = sortedWords.reduce((topicAcc, entry) => {
+  const groupedByCategory = sortedWords.reduce((categoryAcc, entry) => {
+    const category = entry.category || entry.topic || DEFAULT_TOPIC;
     const topic = entry.topic || DEFAULT_TOPIC;
     const subTopic = entry.subTopic || DEFAULT_SUBTOPIC;
-    topicAcc[topic] = topicAcc[topic] || {};
-    topicAcc[topic][subTopic] = topicAcc[topic][subTopic] || [];
-    topicAcc[topic][subTopic].push(entry);
-    return topicAcc;
+    categoryAcc[category] = categoryAcc[category] || {};
+    categoryAcc[category][topic] = categoryAcc[category][topic] || {};
+    categoryAcc[category][topic][subTopic] = categoryAcc[category][topic][subTopic] || [];
+    categoryAcc[category][topic][subTopic].push(entry);
+    return categoryAcc;
   }, {});
 
-  return Object.keys(groupedByTopic)
+  return Object.keys(groupedByCategory)
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-    .map((topic) => `
+    .map((category) => `
       <section class="topic-group">
-        <h2 class="topic-heading">${topic}</h2>
-        ${Object.keys(groupedByTopic[topic])
+        <h2 class="topic-heading">📁 ${category}</h2>
+        ${Object.keys(groupedByCategory[category])
           .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-          .map((subTopic) => {
-            const entries = groupedByTopic[topic][subTopic];
-            const wordsSection = entries.filter((entry) => entry.type === 'Word');
-            const phrasesSection = entries.filter((entry) => entry.type === 'Phrase');
-            return `
-              <div class="subtopic-group">
-                <h3 class="subtopic-heading">${subTopic}</h3>
-                ${wordsSection.length ? `<div class="type-group"><h4>Words</h4>${wordsSection.map(renderWordCard).join('')}</div>` : ''}
-                ${phrasesSection.length ? `<div class="type-group"><h4>Phrases</h4>${phrasesSection.map(renderWordCard).join('')}</div>` : ''}
-              </div>
-            `;
-          })
+          .map((topic) => `
+            <div class="subtopic-group">
+              <h3 class="subtopic-heading">▶ ${topic}</h3>
+              ${Object.keys(groupedByCategory[category][topic])
+                .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+                .map((subTopic) => {
+                  const entries = groupedByCategory[category][topic][subTopic];
+                  const wordsSection = entries.filter((entry) => entry.type === 'Word');
+                  const phrasesSection = entries.filter((entry) => entry.type === 'Phrase');
+                  return `
+                    <div class="subtopic-group nested">
+                      <h4 class="subtopic-heading">• ${subTopic}</h4>
+                      ${wordsSection.length ? `<div class="type-group"><h5>Words</h5>${wordsSection.map(renderWordCard).join('')}</div>` : ''}
+                      ${phrasesSection.length ? `<div class="type-group"><h5>Phrases</h5>${phrasesSection.map(renderWordCard).join('')}</div>` : ''}
+                    </div>
+                  `;
+                })
+                .join('')}
+            </div>
+          `)
           .join('')}
       </section>
     `)
@@ -593,7 +712,7 @@ function renderLearnWordDisplay(entry, highlightIndex = -1) {
 
 function updateLearnDisplay() {
   const currentEntry = learnQueue[currentLearnIndex];
-  displayMeaning.textContent = currentEntry.meaning;
+  displayMeaning.textContent = getMeaningDisplayValue(currentEntry, getCurrentMeaningLanguage());
   displayExample.textContent = currentEntry.example;
   renderLearnWordDisplay(currentEntry);
   learnToggle.textContent = isHiddenWord ? 'Hiện từ' : 'Ẩn từ';
@@ -613,10 +732,22 @@ function speakLearnWord(entry) {
   synth.cancel();
 
   if (mode !== 'spelling') {
-    const utterance = new SpeechSynthesisUtterance(entry.word);
-    utterance.lang = 'en-US';
-    utterance.rate = 0.8;
-    utterance.pitch = 1;
+    const utterance = createSpeechUtterance(entry.word, getCurrentLanguage(), { rate: 0.8, pitch: 1 });
+    utterance.onstart = () => {
+      if (learnMessage) {
+        learnMessage.textContent = 'Đang phát âm...';
+      }
+    };
+    utterance.onerror = () => {
+      if (learnMessage) {
+        learnMessage.textContent = 'Không thể phát âm từ này lúc này.';
+      }
+    };
+    utterance.onend = () => {
+      if (learnMessage) {
+        learnMessage.textContent = '';
+      }
+    };
     synth.speak(utterance);
     return true;
   }
@@ -644,10 +775,17 @@ function speakLearnWord(entry) {
       return;
     }
 
-    const letterUtterance = new SpeechSynthesisUtterance(letters[index]);
-    letterUtterance.lang = 'en-US';
-    letterUtterance.rate = 0.8;
-    letterUtterance.pitch = 1;
+    const letterUtterance = createSpeechUtterance(letters[index], getCurrentLanguage(), { rate: 0.8, pitch: 1 });
+    letterUtterance.onstart = () => {
+      if (learnMessage) {
+        learnMessage.textContent = 'Đang phát âm...';
+      }
+    };
+    letterUtterance.onerror = () => {
+      if (learnMessage) {
+        learnMessage.textContent = 'Không thể phát âm từ này lúc này.';
+      }
+    };
     letterUtterance.onend = () => {
       if (currentRunId !== learnSpellingRunId) {
         return;
@@ -661,10 +799,22 @@ function speakLearnWord(entry) {
           if (currentRunId !== learnSpellingRunId) {
             return;
           }
-          const wholeWordUtterance = new SpeechSynthesisUtterance(entry.word);
-          wholeWordUtterance.lang = 'en-US';
-          wholeWordUtterance.rate = 0.8;
-          wholeWordUtterance.pitch = 1;
+          const wholeWordUtterance = createSpeechUtterance(entry.word, getCurrentLanguage(), { rate: 0.8, pitch: 1 });
+          wholeWordUtterance.onstart = () => {
+            if (learnMessage) {
+              learnMessage.textContent = 'Đang phát âm...';
+            }
+          };
+          wholeWordUtterance.onerror = () => {
+            if (learnMessage) {
+              learnMessage.textContent = 'Không thể phát âm từ này lúc này.';
+            }
+          };
+          wholeWordUtterance.onend = () => {
+            if (learnMessage) {
+              learnMessage.textContent = '';
+            }
+          };
           synth.speak(wholeWordUtterance);
           renderLearnWordDisplay(entry, letters.length - 1);
         }, finishPauseMs);
@@ -788,10 +938,18 @@ function speakText(text, rate = 0.8) {
 
   const synth = window.speechSynthesis;
   synth.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'en-US';
-  utterance.rate = rate;
-  utterance.pitch = 1;
+  const utterance = createSpeechUtterance(text, getCurrentLanguage(), { rate, pitch: 1 });
+  utterance.onstart = () => {
+    testMessage.textContent = 'Đang phát âm...';
+  };
+  utterance.onerror = () => {
+    testMessage.textContent = 'Không thể phát âm nội dung này lúc này.';
+  };
+  utterance.onend = () => {
+    if (selectedTestMode === 'speaking') {
+      testMessage.textContent = 'Sẵn sàng.';
+    }
+  };
   synth.speak(utterance);
   return true;
 }
@@ -809,10 +967,16 @@ function speakSpeakingPrompt(entry) {
 
   const synth = window.speechSynthesis;
   synth.cancel();
-  const utterance = new SpeechSynthesisUtterance(promptText);
-  utterance.lang = 'en-US';
-  utterance.rate = 0.8;
-  utterance.pitch = 1;
+  const utterance = createSpeechUtterance(promptText, getCurrentLanguage(), { rate: 0.8, pitch: 1 });
+  utterance.onstart = () => {
+    testMessage.textContent = 'Đang phát âm...';
+  };
+  utterance.onerror = () => {
+    testMessage.textContent = 'Không thể phát âm yêu cầu này lúc này.';
+  };
+  utterance.onend = () => {
+    testMessage.textContent = 'Sẵn sàng.';
+  };
   synth.speak(utterance);
 }
 
@@ -1075,7 +1239,7 @@ function processTestRecording() {
     }
 
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
+    recognition.lang = getSpeechLanguageCode(getCurrentLanguage());
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
@@ -1270,6 +1434,7 @@ function updateDuplicateStatus() {
   }
 
   const duplicateEntry = findDuplicateVocabularyEntry(getVocabularySnapshot(), currentWord, editingWord || '');
+  const duplicateMeaningValue = getMeaningDisplayValue(duplicateEntry, getCurrentMeaningLanguage());
   if (duplicateEntry) {
     duplicateStatus.classList.remove('hidden');
     duplicateStatus.classList.add('is-duplicate');
@@ -1288,7 +1453,7 @@ function updateDuplicateStatus() {
         </div>
       </div>
       <div class="duplicate-card-details">
-        <p><strong>Meaning:</strong> ${duplicateEntry.meaning}</p>
+        <p><strong>${getActiveDisplayConfig().meaningLabel}:</strong> ${duplicateMeaningValue}</p>
         <p><strong>Example:</strong> ${duplicateEntry.example}</p>
         <p><strong>IPA:</strong> ${duplicateEntry.ipa || '—'}</p>
       </div>
@@ -1391,7 +1556,7 @@ function startEditMode(entry) {
   inputSubtopic.value = subTopic;
   inputType.value = entry.type || DEFAULT_TYPE;
   inputWord.value = entry.word || '';
-  inputMeaning.value = entry.meaning || '';
+  inputMeaning.value = getMeaningValue(entry, getCurrentMeaningLanguage()) || '';
   inputIpa.value = entry.ipa || '';
   inputExample.value = entry.example || '';
   hideWordSuggestions();
@@ -1408,6 +1573,7 @@ function bindEvents() {
     event.preventDefault();
     const word = inputWord.value.trim();
     const meaning = inputMeaning.value.trim();
+    const meanings = buildMeaningMap((editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null)?.meanings || {}, getCurrentMeaningLanguage(), meaning);
     const example = inputExample.value.trim();
     let ipa = inputIpa.value.trim();
     let topic = inputTopic.value;
@@ -1425,6 +1591,12 @@ function bindEvents() {
         return;
       }
       topic = newTopic;
+    }
+
+    // Check if subtopic is in "not selected" state
+    if (subTopic === SUBTOPIC_NOT_SELECTED_VALUE) {
+      addFeedback.textContent = 'Vui lòng chọn Sub Topic.';
+      return;
     }
 
     if (subTopic === ADD_SUBTOPIC_VALUE) {
@@ -1449,10 +1621,10 @@ function bindEvents() {
 
     try {
       if (editingWord) {
-        await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, topic, subTopic, type });
+        await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, topic, subTopic, type, meanings });
         addFeedback.textContent = 'Cập nhật thành công.';
       } else {
-        await addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic, type });
+        await addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic, type, meanings });
         addFeedback.textContent = 'Lưu từ thành công.';
       }
 
@@ -1566,14 +1738,15 @@ function bindEvents() {
       if (newTopic) {
         refreshAddFormTopicList(newTopic);
         inputTopic.value = newTopic;
-        refreshAddFormSubtopicList(newTopic);
+        loadAddFormSubtopicListNotSelected(newTopic);
       } else {
         refreshAddFormTopicList(previousTopic);
         inputTopic.value = previousTopic;
       }
       return;
     }
-    refreshAddFormSubtopicList(inputTopic.value);
+    // When user actively changes to a different topic, reset subtopic to "not selected" state
+    loadAddFormSubtopicListNotSelected(inputTopic.value);
   });
 
   inputSubtopic.addEventListener('focus', () => {
@@ -1689,6 +1862,30 @@ function bindEvents() {
     renderWordList();
   });
 
+  languageSelect?.addEventListener('change', async () => {
+    setCurrentLanguage(languageSelect.value);
+    renderLanguageSelector();
+    updateDynamicLabels();
+    await ensureVocabularyLoaded();
+    await ensurePreferencesLoaded();
+    refreshAddFormTopicList();
+    refreshFilterControls();
+    renderWordList();
+    renderLearnSelection();
+    renderTestState();
+    updateDuplicateStatus();
+  });
+
+  meaningLanguageSelect?.addEventListener('change', () => {
+    setCurrentMeaningLanguage(meaningLanguageSelect.value);
+    renderMeaningLanguageSelector();
+    updateDynamicLabels();
+    renderWordList();
+    if (learnQueue[currentLearnIndex]) {
+      updateLearnDisplay();
+    }
+  });
+
   filterTypeSelect?.addEventListener('change', () => {
     renderWordList();
   });
@@ -1765,8 +1962,24 @@ function bindEvents() {
 async function initializeApp() {
   bindEvents();
   initializeAudio();
+  renderLanguageSelector();
+  renderMeaningLanguageSelector();
+  updateDynamicLabels();
   window.addEventListener('vocabulary-storage-updated', () => {
-    refreshAddFormTopicList();
+    // Preserve current topic and subtopic selections
+    const currentTopic = inputTopic.value && inputTopic.value !== ADD_TOPIC_VALUE ? inputTopic.value : DEFAULT_TOPIC;
+    const currentSubTopic = inputSubtopic.value && inputSubtopic.value !== SUBTOPIC_NOT_SELECTED_VALUE ? inputSubtopic.value : DEFAULT_SUBTOPIC;
+    
+    refreshAddFormTopicList(currentTopic);
+    
+    // Only refresh subtopic if the topic still exists, otherwise reset to default
+    const topics = getStoredTopics();
+    if (!topics.some((t) => t === currentTopic)) {
+      refreshAddFormTopicList(DEFAULT_TOPIC);
+    } else {
+      refreshAddFormSubtopicList(currentTopic, currentSubTopic);
+    }
+    
     refreshFilterControls();
     renderWordList();
     renderLearnSelection();
@@ -1777,6 +1990,9 @@ async function initializeApp() {
   await ensureVocabularyLoaded();
   await ensurePreferencesLoaded();
   await loadSoundSetting();
+  renderLanguageSelector();
+  renderMeaningLanguageSelector();
+  updateDynamicLabels();
   refreshAddFormTopicList();
   refreshFilterControls();
   renderWordList();

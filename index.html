@@ -4,7 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vocabulary Trainer</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <link rel="stylesheet" href="style.css?v=20260710-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -17,6 +20,11 @@
         </div>
       </div>
       <nav class="menu-bar" aria-label="Main menu">
+        <div class="language-switcher">
+          <label for="language-select">Ngôn ngữ học</label>
+          <select id="language-select"></select>
+          <span id="language-label" class="language-label">Ngôn ngữ học: English</span>
+        </div>
         <button class="menu-button active" data-page="add">➕ Thêm từ</button>
         <button class="menu-button" data-page="learn">✍️ Luyện viết</button>
         <button class="menu-button" data-page="test">📝 Test</button>
@@ -62,7 +70,7 @@
               </select>
             </label>
             <label>
-              <span>Term</span>
+              <span data-field-label="term">Term</span>
               <div class="word-input-wrapper">
                 <input type="text" id="input-word" name="word" required autocomplete="off" />
                 <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Term suggestions"></ul>
@@ -71,15 +79,15 @@
               <div id="duplicate-card" class="duplicate-card hidden"></div>
             </label>
             <label>
-              <span>Meaning</span>
+              <span data-field-label="meaning">Meaning</span>
               <input type="text" id="input-meaning" name="meaning" required />
             </label>
             <label>
-              <span>IPA (optional)</span>
+              <span data-field-label="pronunciation">Pronunciation</span>
               <input type="text" id="input-ipa" name="ipa" placeholder="/wɜːrk/" />
             </label>
             <label class="full-width">
-              <span>Example</span>
+              <span data-field-label="example">Example</span>
               <textarea id="input-example" name="example" rows="3" required></textarea>
             </label>
             <div class="form-actions full-width">
@@ -103,6 +111,12 @@
                   <option value="alphabet" selected>A–Z</option>
                   <option value="topic">By Topic</option>
                 </select>
+              </label>
+            </div>
+            <div class="field-card">
+              <label>
+                <span>Meaning Language</span>
+                <select id="meaning-language-select"></select>
               </label>
             </div>
             <div class="field-card">
@@ -183,15 +197,15 @@
 
           <div class="word-card learn-card">
             <div class="card-row">
-              <span class="label">Word</span>
+              <span class="label" data-display-label="term">Word</span>
               <p id="display-word" class="word-value"></p>
             </div>
             <div class="card-row">
-              <span class="label">Meaning</span>
+              <span class="label" data-display-label="meaning">Meaning</span>
               <p id="display-meaning"></p>
             </div>
             <div class="card-row">
-              <span class="label">Example</span>
+              <span class="label" data-display-label="example">Example</span>
               <p id="display-example"></p>
             </div>
             <label class="word-input-label">
@@ -308,6 +322,6 @@
     </main>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=20260710-1"></script>
 </body>
 </html>
