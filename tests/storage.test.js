@@ -27,6 +27,32 @@ test('createVocabularyEntry preserves support data as object arrays', () => {
   assert.deepEqual(entry.antonyms, [{ word: 'solution', meaning: '' }, { word: 'answer', meaning: '' }]);
 });
 
+test('createVocabularyEntry preserves word family and fixed phrases as object arrays', () => {
+  const entry = createVocabularyEntry(
+    'explanation',
+    'lời giải thích',
+    'This is an explanation.',
+    '/ˌɛk.spləˈneɪ.ʃən/',
+    'Education',
+    'School',
+    'Word',
+    {},
+    ['synonym'],
+    ['antonym'],
+    'a statement that makes something clear',
+    [],
+    {},
+    {},
+    {},
+    { basic: 'This is an explanation.' },
+    [{ word: 'explanatory', meaning: 'mang tính giải thích', type: 'Tính từ' }],
+    [{ word: 'give an explanation', meaning: 'đưa ra lời giải thích' }],
+  );
+
+  assert.deepEqual(entry.wordFamily, [{ word: 'explanatory', meaning: 'mang tính giải thích', type: 'Tính từ' }]);
+  assert.deepEqual(entry.fixedPhrases, [{ word: 'give an explanation', meaning: 'đưa ra lời giải thích' }]);
+});
+
 test('createVocabularyEntry normalizes the compact Examples structure', () => {
   const entry = createVocabularyEntry(
     'schedule',

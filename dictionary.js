@@ -196,7 +196,8 @@ function normalizeSupportObjectItem(item) {
       return null;
     }
     const meaning = String(item.meaning || item.translation || item.definition || '').trim();
-    return { word, meaning };
+    const type = String(item.type || item.partOfSpeech || item.pos || '').trim();
+    return type ? { word, meaning, type } : { word, meaning };
   }
 
   return null;
@@ -318,7 +319,7 @@ function buildContextSummary(context = {}) {
   return parts.join(' ').toLowerCase();
 }
 
-function buildSupportPayload({ meaning = '', ipa = '', definition = '', synonyms = [], antonyms = [], collocations = [], basicExample = '', conversationExample = '', lessonExample = '', examples = null } = {}) {
+function buildSupportPayload({ meaning = '', ipa = '', definition = '', synonyms = [], antonyms = [], collocations = [], wordFamily = [], fixedPhrases = [], basicExample = '', conversationExample = '', lessonExample = '', examples = null } = {}) {
   const normalizedExamples = examples && typeof examples === 'object' && !Array.isArray(examples)
     ? {
         basic: String(examples.basic || '').trim(),
@@ -340,6 +341,8 @@ function buildSupportPayload({ meaning = '', ipa = '', definition = '', synonyms
     definition: String(definition || '').trim(),
     synonyms: normalizeSupportObjectList(synonyms),
     antonyms: normalizeSupportObjectList(antonyms),
+    wordFamily: normalizeSupportObjectList(wordFamily),
+    fixedPhrases: normalizeSupportObjectList(fixedPhrases),
     collocations: Array.isArray(collocations) ? collocations.map((item) => String(item || '').trim()).filter(Boolean) : [],
     example: normalizedBasicExample,
     basicExample: normalizedBasicExample,
@@ -351,6 +354,63 @@ function buildSupportPayload({ meaning = '', ipa = '', definition = '', synonyms
       lessonContext: normalizedLessonExample,
     },
   };
+}
+
+function buildWordFamilySuggestions(word) {
+  const normalizedWord = String(word || '').trim().toLowerCase();
+  const wordFamilyMap = {
+    explain: [
+      { word: 'explanation', meaning: 'lời giải thích', type: 'Danh từ' },
+      { word: 'explanatory', meaning: 'mang tính giải thích', type: 'Tính từ' },
+      { word: 'explained', meaning: 'đã giải thích', type: 'Động từ (V2/V3)' },
+      { word: 'explaining', meaning: 'đang giải thích', type: 'V-ing' },
+    ],
+    explanation: [
+      { word: 'explain', meaning: 'giải thích', type: 'Động từ' },
+      { word: 'explanatory', meaning: 'mang tính giải thích', type: 'Tính từ' },
+      { word: 'explained', meaning: 'đã giải thích', type: 'Động từ (V2/V3)' },
+    ],
+    decision: [
+      { word: 'decide', meaning: 'quyết định', type: 'Động từ' },
+      { word: 'decisive', meaning: 'quyết đoán', type: 'Tính từ' },
+      { word: 'decided', meaning: 'đã quyết định', type: 'Động từ (V2/V3)' },
+    ],
+    decide: [
+      { word: 'decision', meaning: 'quyết định', type: 'Danh từ' },
+      { word: 'decisive', meaning: 'quyết đoán', type: 'Tính từ' },
+      { word: 'deciding', meaning: 'đang quyết định', type: 'V-ing' },
+    ],
+  };
+
+  return wordFamilyMap[normalizedWord] || [];
+}
+
+function buildFixedPhraseSuggestions(word) {
+  const normalizedWord = String(word || '').trim().toLowerCase();
+  const fixedPhraseMap = {
+    explain: [
+      { word: 'explain clearly', meaning: 'giải thích một cách rõ ràng' },
+      { word: 'explain something to someone', meaning: 'giải thích một việc cho ai đó' },
+      { word: 'explain the reason', meaning: 'giải thích lý do' },
+    ],
+    explanation: [
+      { word: 'give an explanation', meaning: 'đưa ra lời giải thích' },
+      { word: 'offer an explanation', meaning: 'đưa ra lời giải thích' },
+      { word: 'provide an explanation', meaning: 'cung cấp lời giải thích' },
+      { word: 'need an explanation', meaning: 'cần một lời giải thích' },
+    ],
+    decision: [
+      { word: 'make a decision', meaning: 'đưa ra quyết định' },
+      { word: 'reach a decision', meaning: 'đi đến quyết định' },
+      { word: 'final decision', meaning: 'quyết định cuối cùng' },
+    ],
+    decide: [
+      { word: 'decide on something', meaning: 'quyết định về điều gì đó' },
+      { word: 'decide to do something', meaning: 'quyết định làm điều gì đó' },
+    ],
+  };
+
+  return fixedPhraseMap[normalizedWord] || [];
 }
 
 function buildGenericSupportData(word, context = {}) {
@@ -375,6 +435,8 @@ function buildGenericSupportData(word, context = {}) {
     definition: baseDefinition,
     synonyms: [],
     antonyms: [],
+    wordFamily: buildWordFamilySuggestions(normalizedWord),
+    fixedPhrases: buildFixedPhraseSuggestions(normalizedWord),
     collocations: normalizedWord ? [`use ${normalizedWord} in conversation`, `${normalizedWord} appears in this topic`] : [],
     basicExample,
     conversationExample,
@@ -438,6 +500,14 @@ function mergeSupportDataWithContext(staticData = {}, word, context = {}) {
     definition: staticData.definition || contextualData.definition || '',
     synonyms: [...new Set([...(staticData.synonyms || []), ...(contextualData.synonyms || [])])],
     antonyms: [...new Set([...(staticData.antonyms || []), ...(contextualData.antonyms || [])])],
+    wordFamily: [...new Set([...(staticData.wordFamily || []), ...(contextualData.wordFamily || [])].map((item) => normalizeSupportObjectItem(item)).filter(Boolean).map((item) => `${item.word}::${item.type || ''}::${item.meaning}`))].map((item) => {
+      const [word, type, meaning] = item.split('::');
+      return { word, type, meaning };
+    }),
+    fixedPhrases: [...new Set([...(staticData.fixedPhrases || []), ...(contextualData.fixedPhrases || [])].map((item) => normalizeSupportObjectItem(item)).filter(Boolean).map((item) => `${item.word}::${item.meaning}`))].map((item) => {
+      const [word, meaning] = item.split('::');
+      return { word, meaning };
+    }),
     collocations,
     basicExample,
     conversationExample,
@@ -609,6 +679,8 @@ export async function fetchWordSupportData(word, context = {}) {
       ...merged,
       synonyms: enrichedSynonyms.map((item) => item.word),
       antonyms: enrichedAntonyms.map((item) => item.word),
+      wordFamily: merged.wordFamily || [],
+      fixedPhrases: merged.fixedPhrases || [],
     };
   }
 
@@ -629,6 +701,8 @@ export async function fetchWordSupportData(word, context = {}) {
       ...contextual,
       synonyms: contextual.synonyms.map((item) => item.word),
       antonyms: contextual.antonyms.map((item) => item.word),
+      wordFamily: contextual.wordFamily || [],
+      fixedPhrases: contextual.fixedPhrases || [],
     };
   }
 
@@ -659,6 +733,8 @@ export async function fetchWordSupportData(word, context = {}) {
       ...payload,
       synonyms: enrichedSynonyms.map((item) => item.word),
       antonyms: enrichedAntonyms.map((item) => item.word),
+      wordFamily: payload.wordFamily || [],
+      fixedPhrases: payload.fixedPhrases || [],
       enrichedSynonyms,
       enrichedAntonyms,
     };

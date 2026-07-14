@@ -175,7 +175,8 @@ function normalizeSupportObjectList(value) {
         if (typeof item === 'object' && item !== null) {
           const word = String(item.word || item.text || item.label || '').trim();
           const meaning = String(item.meaning || item.translation || item.definition || '').trim();
-          return word ? { word, meaning } : null;
+          const type = String(item.type || item.partOfSpeech || item.pos || '').trim();
+          return word ? (type ? { word, meaning, type } : { word, meaning }) : null;
         }
         return null;
       })
@@ -187,7 +188,7 @@ function normalizeSupportObjectList(value) {
       .split(/\n|,|;/)
       .map((item) => String(item || '').trim())
       .filter(Boolean)
-      .map((word) => ({ word, meaning: '' }));
+      .map((word) => ({ word, meaning: '', type: '' }));
   }
 
   return [];
@@ -225,6 +226,8 @@ function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
   const legacyMeaningValue = meanings.vietnamese || meanings.vi || entry?.meaning || '';
   const synonyms = normalizeSupportObjectList(entry?.synonyms);
   const antonyms = normalizeSupportObjectList(entry?.antonyms);
+  const wordFamily = normalizeSupportObjectList(entry?.wordFamily);
+  const fixedPhrases = normalizeSupportObjectList(entry?.fixedPhrases);
   const legacyExamples = entry?.examples && typeof entry.examples === 'object' && !Array.isArray(entry.examples) ? entry.examples : {};
   const exampleValue = String(
     entry?.example ||
@@ -253,6 +256,8 @@ function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
     ipa: entry?.ipa ? String(entry.ipa).trim() : '',
     synonyms,
     antonyms,
+    wordFamily,
+    fixedPhrases,
     examples,
     topic: normalizedTopic,
     subTopic: normalizedSubTopic,
@@ -292,6 +297,8 @@ export function toFirestorePayload(entry) {
     ipa: entry.ipa,
     synonyms: normalizeSupportObjectList(entry.synonyms),
     antonyms: normalizeSupportObjectList(entry.antonyms),
+    wordFamily: normalizeSupportObjectList(entry.wordFamily),
+    fixedPhrases: normalizeSupportObjectList(entry.fixedPhrases),
     examples: entry.examples && typeof entry.examples === 'object' ? { basic: String(entry.examples.basic || entry.example || '').trim() } : { basic: exampleValue },
     topic: entry.topic,
     subTopic: entry.subTopic,
@@ -876,6 +883,8 @@ export function createVocabularyEntry(
   conversationExample = '',
   lessonExample = '',
   examples = null,
+  wordFamily = [],
+  fixedPhrases = [],
 ) {
   const normalizedMeanings = normalizeMeaningMap(meanings || meaning);
   const fallbackMeaning = normalizedMeanings.vietnamese || normalizedMeanings.vi || String(meaning || '').trim();
@@ -922,6 +931,8 @@ export function createVocabularyEntry(
     ipa: String(ipa || '').trim(),
     synonyms: normalizeSupportObjectList(synonyms),
     antonyms: normalizeSupportObjectList(antonyms),
+    wordFamily: normalizeSupportObjectList(wordFamily),
+    fixedPhrases: normalizeSupportObjectList(fixedPhrases),
     examples: normalizedExamples,
     topic: String(topic || '').trim() || DEFAULT_TOPIC,
     subTopic: String(subTopic || '').trim() || DEFAULT_SUBTOPIC,
@@ -954,6 +965,8 @@ export async function addVocabularyEntry(entry) {
     entry.conversationExample,
     entry.lessonExample,
     entry.examples,
+    entry.wordFamily,
+    entry.fixedPhrases,
   );
 
   if (!normalizedEntry.word) {

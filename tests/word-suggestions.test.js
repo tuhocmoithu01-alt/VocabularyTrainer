@@ -67,6 +67,24 @@ test('fetchWordSupportData fills a complete support payload from topic and meani
   assert.ok(suggestion.examples?.lessonContext || suggestion.lessonExample);
 });
 
+test('fetchWordSupportData returns word family and fixed phrases in object form', async () => {
+  const suggestion = await fetchWordSupportData('explanation', {
+    language: 'english',
+    topic: 'Business English',
+    subTopic: 'Communication',
+    meaning: 'lời giải thích',
+  });
+
+  assert.ok(Array.isArray(suggestion.wordFamily));
+  assert.ok(Array.isArray(suggestion.fixedPhrases));
+  if (suggestion.wordFamily.length) {
+    assert.ok(suggestion.wordFamily[0].word);
+  }
+  if (suggestion.fixedPhrases.length) {
+    assert.ok(suggestion.fixedPhrases[0].word);
+  }
+});
+
 test('fetchWordSupportData keeps the meaning in Vietnamese and the other fields in English', async () => {
   const suggestion = await fetchWordSupportData('problem', {
     language: 'english',

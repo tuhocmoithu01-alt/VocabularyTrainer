@@ -90,10 +90,22 @@ export function buildTestQueue(words) {
 
 /**
  * Compare user answer with the expected word.
+ * Normalizes: trim + lowercase + whitespace normalization
  * @param {string} answer
  * @param {Object} wordEntry
  * @returns {boolean}
  */
 export function isTestAnswerCorrect(answer, wordEntry) {
-  return answer.trim().toLowerCase() === wordEntry.word.toLowerCase();
+  // Normalize both answer and expected word
+  const normalizedAnswer = String(answer || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  
+  const normalizedExpected = String(wordEntry?.word || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  
+  return normalizedAnswer === normalizedExpected;
 }

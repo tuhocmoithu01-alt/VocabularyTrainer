@@ -77,6 +77,8 @@ const inputMeaning = document.getElementById('input-meaning');
 const inputIpa = document.getElementById('input-ipa');
 const inputSynonyms = document.getElementById('input-synonyms');
 const inputAntonyms = document.getElementById('input-antonyms');
+const inputWordFamily = document.getElementById('input-word-family');
+const inputFixedPhrases = document.getElementById('input-fixed-phrases');
 const inputExample = document.getElementById('input-example');
 const generateSupportDataButton = document.getElementById('generate-support-data');
 const addFeedback = document.getElementById('add-feedback');
@@ -192,6 +194,8 @@ let activeSuggestionIndex = -1;
 let duplicateHighlightTimer = null;
 let currentSupportSynonyms = [];
 let currentSupportAntonyms = [];
+let currentSupportWordFamily = [];
+let currentSupportFixedPhrases = [];
 
 function logSpeechEvent(event, detail = {}) {
   const entry = { event, state: speechStateMachine.getState(), detail };
@@ -221,12 +225,16 @@ function updateSpeechButtonState() {
 }
 
 function cleanupSpeechSession({ preservePending = false } = {}) {
+  // Cancel speech synthesis
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
 
   pendingRecordingAfterPlayback = preservePending;
   activeSpeechPlaybackToken += 1;
+
+  // Properly cleanup and destroy voice recognition
+  stopVoiceRecognition();
 
   const activeRecognition = speechStateMachine.getActiveRecognition();
   if (activeRecognition) {
@@ -298,6 +306,8 @@ function clearAddFormInputFields() {
   inputIpa.value = '';
   inputSynonyms.value = '';
   inputAntonyms.value = '';
+  inputWordFamily.value = '';
+  inputFixedPhrases.value = '';
   inputExample.value = '';
   editingWord = null;
   addFeedback.textContent = '';
@@ -305,6 +315,8 @@ function clearAddFormInputFields() {
   updateDuplicateStatus();
   currentSupportSynonyms = [];
   currentSupportAntonyms = [];
+  currentSupportWordFamily = [];
+  currentSupportFixedPhrases = [];
 }
 
 function resetAddForm() {
@@ -652,12 +664,21 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function renderSupportTable(items, title) {
+function renderSupportTable(items, title, columns = [], emptyMessage = '') {
   if (!Array.isArray(items) || items.length === 0) {
+    if (emptyMessage) {
+      return `
+        <div class="support-table-wrapper">
+          <div class="support-table-title">${title}</div>
+          <p class="support-table-empty">${escapeHtml(emptyMessage)}</p>
+        </div>
+      `;
+    }
     return '';
   }
 
-  const headerLabel = title === 'Từ đồng nghĩa' ? 'Từ đồng nghĩa' : 'Từ trái nghĩa';
+  const headerLabel = title === 'Từ đồng nghĩa' ? 'Từ đồng nghĩa' : title === 'Từ trái nghĩa' ? 'Từ trái nghĩa' : title;
+  const columnHeaders = columns.length ? columns : ['Từ', 'Nghĩa'];
   return `
     <div class="support-table-wrapper">
       <div class="support-table-title">${title}</div>
@@ -665,21 +686,20 @@ function renderSupportTable(items, title) {
         <thead>
           <tr>
             <th>STT</th>
-            <th>${headerLabel}</th>
-            <th>Nghĩa</th>
+            ${columnHeaders.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
           ${items
-            .map(
-              (item, index) => `
-                <tr>
-                  <td>${index + 1}</td>
-                  <td>${escapeHtml(item.word || item.text || item.label || '')}</td>
-                  <td>${escapeHtml(item.meaning || item.translation || item.definition || '')}</td>
-                </tr>
-              `,
-            )
+            .map((item, index) => {
+              const rowCells = columnHeaders.map((column) => {
+                const key = column === 'Từ' || column === 'Cụm từ' ? 'word' : column === 'Loại từ' ? 'type' : 'meaning';
+                const rawValue = item[key] ?? item.word ?? item.text ?? item.label ?? '';
+                const value = typeof rawValue === 'string' ? rawValue : String(rawValue || '');
+                return `<td>${escapeHtml(value)}</td>`;
+              });
+              return `<tr><td>${index + 1}</td>${rowCells.join('')}</tr>`;
+            })
             .join('')}
         </tbody>
       </table>
@@ -699,9 +719,11 @@ function mergeSupportLists(currentList = [], parsedList = []) {
       return;
     }
     const existing = existingMap.get(key);
+    const type = String(item.type || (existing && existing.type) || '').trim();
     merged.set(key, {
       word: String(item.word || '').trim(),
       meaning: String(item.meaning || (existing && existing.meaning) || '').trim(),
+      ...(type ? { type } : {}),
     });
   });
 
@@ -723,9 +745,11 @@ function normalizeSupportList(items) {
           return { word: item.trim(), meaning: '' };
         }
         if (typeof item === 'object' && item !== null) {
+          const type = String(item.type || item.partOfSpeech || item.pos || '').trim();
           return {
             word: String(item.word || item.text || item.label || '').trim(),
             meaning: String(item.meaning || item.translation || item.definition || '').trim(),
+            ...(type ? { type } : {}),
           };
         }
         return null;
@@ -749,6 +773,8 @@ function renderWordCard(entry) {
   const exampleValue = entry.example || entry.basicExample || entry.examples?.basic || entry.examples?.example || '';
   const synonyms = normalizeSupportList(entry.synonyms);
   const antonyms = normalizeSupportList(entry.antonyms);
+  const wordFamily = normalizeSupportList(entry.wordFamily);
+  const fixedPhrases = normalizeSupportList(entry.fixedPhrases);
   return `
     <div class="word-item" data-word="${escapeHtml(entry.word)}" data-doc-id="${escapeHtml(entry.docId || '')}">
       <div>
@@ -756,15 +782,16 @@ function renderWordCard(entry) {
         <p><strong>Type:</strong> ${escapeHtml(entry.type || DEFAULT_TYPE)}</p>
         <p><strong>Topic:</strong> ${escapeHtml(entry.topic)}</p>
         <p><strong>Sub Topic:</strong> ${escapeHtml(entry.subTopic)}</p>
+        <p><strong>${config.pronunciationLabel}:</strong> ${escapeHtml(entry.ipa || entry.pronunciation || '—')}</p>
         <p><strong>${config.meaningLabel}:</strong> ${escapeHtml(meaningValue)}</p>
         <p class="word-example"><strong>${config.exampleLabel}:</strong> ${escapeHtml(exampleValue || '—')}</p>
-        <p><strong>${config.pronunciationLabel}:</strong> ${escapeHtml(entry.ipa || entry.pronunciation || '—')}</p>
         <p><strong>Trạng thái:</strong> ${entry.learned ? 'Đã thuộc' : 'Chưa thuộc'}</p>
-        <!-- Common Collocations removed per refactor -->
       </div>
       <div class="word-support-tables">
-        ${renderSupportTable(synonyms, 'Từ đồng nghĩa')}
-        ${renderSupportTable(antonyms, 'Từ trái nghĩa')}
+        ${renderSupportTable(synonyms, 'Đồng nghĩa', ['Từ', 'Nghĩa'])}
+        ${renderSupportTable(antonyms, 'Trái nghĩa', ['Từ', 'Nghĩa'])}
+        ${renderSupportTable(wordFamily, 'Họ từ', ['Từ', 'Loại từ', 'Nghĩa'], 'Không có họ từ.')}
+        ${renderSupportTable(fixedPhrases, 'Cụm từ cố định', ['Cụm từ', 'Nghĩa'], 'Không có cụm từ cố định.')}
       </div>
       <div class="word-actions">
         <button type="button" class="edit-word secondary-button">✏ Edit</button>
@@ -1159,9 +1186,25 @@ function setSelectedTestMode(mode) {
 function stopVoiceRecognition() {
   if (testRecognition) {
     try {
-      testRecognition.stop();
+      // First try to abort (most forceful)
+      testRecognition.abort();
+    } catch (error1) {
+      try {
+        // If abort fails, try stop
+        testRecognition.stop();
+      } catch (error2) {
+        console.warn('Failed to stop/abort recognition', error2);
+      }
+    }
+    
+    // Clear all event handlers to prevent memory leaks
+    try {
+      testRecognition.onstart = null;
+      testRecognition.onresult = null;
+      testRecognition.onerror = null;
+      testRecognition.onend = null;
     } catch (error) {
-      console.warn('Failed to stop recognition', error);
+      console.warn('Failed to clear recognition handlers', error);
     }
   }
   testRecognition = null;
@@ -1395,7 +1438,11 @@ function resetLearnSession() {
 function resetTestSession() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  
+  // Fully cleanup speech recognition
+  stopVoiceRecognition();
   cleanupSpeechSession({ preservePending: false });
+  
   isTestTransitioning = false;
   testQueue = [];
   currentTestIndex = 0;
@@ -1421,7 +1468,6 @@ function resetTestSession() {
   testInputLabel.textContent = 'Gõ từ';
   testModeLabel.textContent = '';
   testStageLabel.textContent = '';
-  stopVoiceRecognition();
   setTestSessionVisibility(false);
   sessionActive = false;
 }
@@ -1572,7 +1618,15 @@ function handleSpeakingTestSkip() {
   testRecord.disabled = true;
   testListen.disabled = true;
   testMessage.textContent = 'Đã bỏ qua câu hỏi này.';
-  proceedToNextTestQuestion();
+  
+  // CRITICAL: Fully cleanup speech recognition before moving to next question
+  stopVoiceRecognition();
+  cleanupSpeechSession({ preservePending: false });
+  
+  // Small delay to ensure cleanup completes
+  testTimeout(() => {
+    proceedToNextTestQuestion();
+  }, 50);
 }
 
 function processTestListening() {
@@ -1631,13 +1685,10 @@ function processTestRecording() {
   updateSpeechButtonState();
   logSpeechEvent('recording-started');
 
-  if (testRecognition) {
-    try {
-      testRecognition.stop();
-    } catch (error) {
-      console.warn('Failed to stop previous recognition', error);
-    }
-  }
+  // CRITICAL: Properly cleanup old recognition before creating new one
+  // This prevents "dead" recognition from blocking new instances
+  stopVoiceRecognition();
+  speechStateMachine.clearActiveRecognition();
 
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
@@ -1665,13 +1716,20 @@ function processTestRecording() {
     };
 
     recognition.onresult = (event) => {
+      // Prevent processing if this is not the active session
+      if (testRecognition !== recognition) {
+        logSpeechEvent('recognition-result-ignored', { reason: 'inactive-session' });
+        return;
+      }
+      
       speechStateMachine.beginProcessing();
       updateSpeechButtonState();
       const transcript = Array.from(event.results)
         .map((result) => result[0].transcript)
         .join(' ');
-      const expected = normalizeText(getSpeakingPromptText(selectedSpeakingMode, entry));
-      const actual = normalizeText(transcript);
+      // Normalize BOTH expected and actual for case-insensitive comparison
+      const expected = normalizeText(getSpeakingPromptText(selectedSpeakingMode, entry)).trim();
+      const actual = normalizeText(transcript).trim();
       const correct = actual === expected;
 
       if (correct) {
@@ -1698,6 +1756,12 @@ function processTestRecording() {
     };
 
     recognition.onerror = (event) => {
+      // Prevent processing if this is not the active session
+      if (testRecognition !== recognition) {
+        logSpeechEvent('recognition-error-ignored', { reason: 'inactive-session' });
+        return;
+      }
+      
       const errorCode = event?.error || 'unknown';
       console.error('Speech recognition error', { errorCode, event });
       testMessage.textContent = getSpeechRecognitionErrorMessage(errorCode);
@@ -1705,11 +1769,13 @@ function processTestRecording() {
       if (selectedTestMode === 'speaking') {
         handleSpeakingTestFailure();
       }
+      stopVoiceRecognition();
       speechStateMachine.reset();
       updateSpeechButtonState();
     };
 
     recognition.onend = () => {
+      // Prevent processing if this is not the active session
       if (testRecognition === recognition) {
         testRecognition = null;
       }
@@ -1732,7 +1798,9 @@ function processTestSubmission() {
     return;
   }
 
-  const answer = testAnswer.value.trim();
+  // Normalize answer: trim, normalize whitespace, lowercase
+  const rawAnswer = testAnswer.value;
+  const answer = normalizeText(rawAnswer).trim();
   if (!answer) {
     testMessage.textContent = 'Nhập câu trả lời để kiểm tra.';
     return;
@@ -1742,10 +1810,12 @@ function processTestSubmission() {
   let feedback = '';
 
   if (selectedDictationMode === 'example') {
-    correct = normalizeText(answer) === normalizeText(entry.example);
+    const expected = normalizeText(entry.example).trim();
+    correct = answer === expected;
     feedback = correct ? '✅ Chính xác.' : '❌ Sai. Hãy thử lại.';
   } else {
-    correct = normalizeText(answer) === normalizeText(entry.word);
+    const expected = normalizeText(entry.word).trim();
+    correct = answer === expected;
     feedback = correct ? '✅ Chính xác.' : '❌ Sai. Hãy thử lại.';
   }
 
@@ -1790,7 +1860,11 @@ function proceedToNextTestQuestion() {
   isTestTransitioning = true;
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  
+  // Fully cleanup speech recognition before moving to next
+  stopVoiceRecognition();
   cleanupSpeechSession({ preservePending: false });
+  
   const entry = testQueue[currentTestIndex];
   if (selectedTestMode === 'speaking' && entry) {
     const questionKey = `${entry.word}:${currentTestIndex}`;
@@ -1799,6 +1873,7 @@ function proceedToNextTestQuestion() {
 
   if (selectedTestMode === 'dictation') {
     dictationStage = 'word';
+    dictationWrongAttempts = 0;  // Reset dictation wrong attempts
   }
 
   if (currentTestIndex + 1 >= testQueue.length) {
@@ -2021,8 +2096,12 @@ function startEditMode(entry) {
   const normalizedAntonyms = normalizeSupportList(entry.antonyms);
   inputSynonyms.value = normalizedSynonyms.map((s) => s.word).join(', ');
   inputAntonyms.value = normalizedAntonyms.map((s) => s.word).join(', ');
+  inputWordFamily.value = normalizeSupportList(entry.wordFamily).map((item) => item.word).join(', ');
+  inputFixedPhrases.value = normalizeSupportList(entry.fixedPhrases).map((item) => item.word).join(', ');
   currentSupportSynonyms = normalizedSynonyms;
   currentSupportAntonyms = normalizedAntonyms;
+  currentSupportWordFamily = normalizeSupportList(entry.wordFamily);
+  currentSupportFixedPhrases = normalizeSupportList(entry.fixedPhrases);
   inputExample.value = exampleValue;
   syncExampleTextareaHeights();
   hideWordSuggestions();
@@ -2052,7 +2131,7 @@ async function applyGeneratedSupportData(word) {
     if (!inputMeaning.value.trim() && suggestion.meaning) {
       inputMeaning.value = suggestion.meaning;
     }
-    // definition removed from form; only fill ipa, meaning, synonyms, antonyms, example
+    // definition removed from form; only fill ipa, meaning, synonyms, antonyms, example and new support data
     if (!inputSynonyms.value.trim() && suggestion.synonyms?.length) {
       inputSynonyms.value = suggestion.synonyms
         .map((item) => (typeof item === 'object' ? item.word : item))
@@ -2062,8 +2141,19 @@ async function applyGeneratedSupportData(word) {
     }
     const generatedSynonyms = normalizeSupportList(suggestion.synonyms);
     const generatedAntonyms = normalizeSupportList(suggestion.antonyms);
+    const generatedWordFamily = normalizeSupportList(suggestion.wordFamily);
+    const generatedFixedPhrases = normalizeSupportList(suggestion.fixedPhrases);
     currentSupportSynonyms = mergeSupportLists(currentSupportSynonyms, generatedSynonyms);
     currentSupportAntonyms = mergeSupportLists(currentSupportAntonyms, generatedAntonyms);
+    currentSupportWordFamily = mergeSupportLists(currentSupportWordFamily, generatedWordFamily);
+    currentSupportFixedPhrases = mergeSupportLists(currentSupportFixedPhrases, generatedFixedPhrases);
+
+    if (!inputWordFamily.value.trim() && generatedWordFamily.length) {
+      inputWordFamily.value = generatedWordFamily.map((item) => item.word).filter(Boolean).join(', ');
+    }
+    if (!inputFixedPhrases.value.trim() && generatedFixedPhrases.length) {
+      inputFixedPhrases.value = generatedFixedPhrases.map((item) => item.word).filter(Boolean).join(', ');
+    }
 
     if (!inputSynonyms.value.trim() && suggestion.synonyms?.length) {
       inputSynonyms.value = suggestion.synonyms
@@ -2110,8 +2200,12 @@ function bindEvents() {
     let ipa = inputIpa.value.trim();
     const parsedSynonyms = normalizeSupportList(inputSynonyms.value);
     const parsedAntonyms = normalizeSupportList(inputAntonyms.value);
+    const parsedWordFamily = normalizeSupportList(inputWordFamily.value);
+    const parsedFixedPhrases = normalizeSupportList(inputFixedPhrases.value);
     const synonyms = mergeSupportLists(currentSupportSynonyms, parsedSynonyms);
     const antonyms = mergeSupportLists(currentSupportAntonyms, parsedAntonyms);
+    const wordFamily = mergeSupportLists(currentSupportWordFamily, parsedWordFamily);
+    const fixedPhrases = mergeSupportLists(currentSupportFixedPhrases, parsedFixedPhrases);
     const needsSupportEnrichment = (items) => Array.isArray(items) && items.some((item) => item && item.word && !item.meaning);
     const enrichedSynonyms = needsSupportEnrichment(synonyms) ? await enrichSupportEntriesWithMeanings(synonyms) : synonyms;
     const enrichedAntonyms = needsSupportEnrichment(antonyms) ? await enrichSupportEntriesWithMeanings(antonyms) : antonyms;
@@ -2162,10 +2256,10 @@ function bindEvents() {
 
     try {
       if (editingWord) {
-          await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, topic, subTopic, type, meanings, examples });
+          await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, wordFamily, fixedPhrases, topic, subTopic, type, meanings, examples });
         addFeedback.textContent = 'Cập nhật thành công.';
       } else {
-          await addVocabularyEntry({ word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, topic, subTopic, type, meanings, examples });
+          await addVocabularyEntry({ word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, wordFamily, fixedPhrases, topic, subTopic, type, meanings, examples });
         addFeedback.textContent = 'Lưu từ thành công.';
       }
 
