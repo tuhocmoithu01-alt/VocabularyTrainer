@@ -250,10 +250,38 @@ select:focus {
 
 textarea {
   resize: vertical;
+  min-height: 84px;
+  line-height: 1.5;
+  overflow-y: hidden;
+}
+
+.example-textarea {
+  min-height: 92px;
+  white-space: pre-wrap;
 }
 
 .full-width {
   grid-column: 1 / -1;
+}
+
+.support-section {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(100, 116, 139, 0.16);
+  border-radius: 18px;
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.support-section-title {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.example-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .button-row,
@@ -262,6 +290,16 @@ textarea {
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+.auto-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.auto-field-row input {
+  flex: 1;
 }
 
 .primary-button,
@@ -308,11 +346,53 @@ textarea {
 
 .word-item {
   display: grid;
-  gap: 12px;
+  gap: 20px;
   padding: 18px;
   border-radius: 18px;
   background: var(--surface-strong);
   border: 1px solid var(--border);
+}
+
+.word-item-main {
+  display: grid;
+  gap: 10px;
+}
+
+.word-support-tables {
+  display: grid;
+  gap: 16px;
+}
+
+.support-table-wrapper {
+  overflow-x: auto;
+}
+
+.support-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.support-table th,
+.support-table td {
+  border: 1px solid rgba(100, 116, 139, 0.16);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.support-table th {
+  background: rgba(37, 99, 235, 0.05);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.support-table td {
+  background: var(--surface);
+}
+
+.support-table-title {
+  font-weight: 700;
+  margin-bottom: 8px;
 }
 
 .word-actions {
@@ -329,6 +409,11 @@ textarea {
 .word-item p {
   margin: 4px 0;
   color: var(--muted);
+}
+
+.word-example {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .word-item .delete-word {

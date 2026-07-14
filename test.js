@@ -34,13 +34,58 @@ export function filterWordSuggestions(words, query, limit = 10) {
     .slice(0, limit);
 }
 
+function buildWordGroupItems(wordEntry) {
+  const baseWord = wordEntry?.word ? String(wordEntry.word).trim() : '';
+  if (!baseWord) {
+    return [];
+  }
+
+  const synonyms = Array.isArray(wordEntry?.synonyms) ? wordEntry.synonyms : [];
+  const antonyms = Array.isArray(wordEntry?.antonyms) ? wordEntry.antonyms : [];
+  const supportWords = [...synonyms, ...antonyms]
+    .filter((item) => typeof item === 'string' && item.trim())
+    .map((item) => item.trim());
+
+  const uniqueWords = [baseWord, ...supportWords.filter((item) => item.toLowerCase() !== baseWord.toLowerCase())];
+  return uniqueWords.map((item, index) => ({
+    word: item,
+    groupWord: baseWord,
+    groupSize: uniqueWords.length,
+    groupPosition: index + 1,
+  }));
+}
+
 /**
- * Build a randomized test queue from all words.
+ * Build a test queue that progresses through word groups in order.
+ * Each word group includes the main word plus its suggested support words.
  * @param {Array<Object>} words
  * @returns {Array<Object>}
  */
 export function buildTestQueue(words) {
-  return shuffle(words);
+  const groupedEntries = [];
+
+  words.forEach((wordEntry, wordIndex) => {
+    const groupItems = buildWordGroupItems(wordEntry);
+    if (!groupItems.length) {
+      groupedEntries.push({ ...wordEntry, groupWord: wordEntry.word, groupKey: wordEntry.word, groupSize: 1, groupPosition: 1, groupIndex: wordIndex });
+      return;
+    }
+
+    groupItems.forEach((item, itemIndex) => {
+      groupedEntries.push({
+        ...wordEntry,
+        ...item,
+        word: item.word,
+        groupWord: wordEntry.word,
+        groupKey: wordEntry.word,
+        groupIndex: wordIndex,
+        groupSize: groupItems.length,
+        groupPosition: itemIndex + 1,
+      });
+    });
+  });
+
+  return groupedEntries;
 }
 
 /**

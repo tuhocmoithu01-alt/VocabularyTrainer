@@ -82,14 +82,36 @@
               <span data-field-label="meaning">Meaning</span>
               <input type="text" id="input-meaning" name="meaning" required />
             </label>
-            <label>
-              <span data-field-label="pronunciation">Pronunciation</span>
-              <input type="text" id="input-ipa" name="ipa" placeholder="/wɜːrk/" />
-            </label>
             <label class="full-width">
-              <span data-field-label="example">Example</span>
-              <textarea id="input-example" name="example" rows="3" required></textarea>
+              <span>IPA</span>
+              <div class="auto-field-row">
+                <input type="text" id="input-ipa" name="ipa" placeholder="/wɜːrk/" />
+                <button type="button" id="generate-support-data" class="secondary-button">✨ Tự động</button>
+              </div>
             </label>
+            <label>
+              <!-- Definition field removed per refactor -->
+            </label>
+            <label>
+              <span>Synonyms</span>
+              <input type="text" id="input-synonyms" name="synonyms" placeholder="issue, difficulty" />
+            </label>
+            <label>
+              <span>Antonyms</span>
+              <input type="text" id="input-antonyms" name="antonyms" placeholder="solution, answer" />
+            </label>
+            <label>
+              <!-- Common Collocations removed per refactor -->
+            </label>
+            <div class="support-section full-width">
+              <div class="support-section-title">Ví dụ</div>
+              <div class="example-fields single-example-field">
+                <label>
+                  <span>Ví dụ</span>
+                  <textarea id="input-example" name="example" rows="3" class="example-textarea"></textarea>
+                </label>
+              </div>
+            </div>
             <div class="form-actions full-width">
               <button type="submit" id="add-submit" class="primary-button">Lưu từ</button>
               <button type="button" id="add-cancel" class="secondary-button hidden">Hủy</button>
@@ -109,7 +131,9 @@
                 <span>Sort By</span>
                 <select id="sort-by">
                   <option value="alphabet" selected>A–Z</option>
+                  <option value="reverse-alphabet">Z–A</option>
                   <option value="topic">By Topic</option>
+                  <option value="status">By Status</option>
                 </select>
               </label>
             </div>
@@ -279,6 +303,7 @@
             <div>
               <h3 id="test-title-session">Test từ vựng</h3>
               <p id="test-counter"></p>
+              <p id="test-progress-detail" class="feedback"></p>
             </div>
             <div class="progress-bar">
               <span id="test-progress" class="progress-fill"></span>
@@ -307,6 +332,8 @@
               <button id="test-record" class="secondary-button">🎤 Record</button>
               <button id="test-submit" class="primary-button">Kiểm tra</button>
               <button id="test-next" class="secondary-button hidden">⏭ Next</button>
+              <button id="test-retry" class="secondary-button hidden">🔁 Thử lại</button>
+              <button id="test-skip" class="secondary-button hidden">⏭ Bỏ qua</button>
             </div>
             <div id="test-message" class="feedback" aria-live="polite"></div>
           </div>

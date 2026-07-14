@@ -27,7 +27,7 @@ import {
 } from './storage.js';
 import { getCurrentLanguage, getLanguageLabel, getLanguageOptions, setCurrentLanguage } from './language-manager.js';
 import { buildMeaningMap, getCurrentMeaningLanguage, getDisplayConfig, getMeaningDisplayValue, getMeaningLanguageOptions, getMeaningValue, setCurrentMeaningLanguage } from './language-config.js';
-import { fetchWordIpa } from './dictionary.js';
+import { fetchWordIpa, fetchWordSupportData, enrichSupportEntriesWithMeanings } from './dictionary.js';
 import {
   buildLearnQueue,
   formatLearnLabel,
@@ -48,6 +48,8 @@ import {
   requestMicrophoneAccess,
 } from './speech-recognition.js';
 import { createSpeechUtterance, getSpeechLanguageCode } from './speech.js';
+import { createSpeechStateMachine, SPEECH_STATES } from './speech-state.js';
+import { createSpeakingTestFlowState } from './speaking-test-flow.js';
 import {
   getDictationInstruction,
   getDictationPromptLabel,
@@ -73,7 +75,10 @@ const inputType = document.getElementById('input-type');
 const inputWord = document.getElementById('input-word');
 const inputMeaning = document.getElementById('input-meaning');
 const inputIpa = document.getElementById('input-ipa');
+const inputSynonyms = document.getElementById('input-synonyms');
+const inputAntonyms = document.getElementById('input-antonyms');
 const inputExample = document.getElementById('input-example');
+const generateSupportDataButton = document.getElementById('generate-support-data');
 const addFeedback = document.getElementById('add-feedback');
 const addSubmitButton = document.getElementById('add-submit');
 const addCancelButton = document.getElementById('add-cancel');
@@ -115,6 +120,7 @@ const testNext = document.getElementById('test-next');
 const testMessage = document.getElementById('test-message');
 const testProgress = document.getElementById('test-progress');
 const testCounter = document.getElementById('test-counter');
+const testProgressDetail = document.getElementById('test-progress-detail');
 const testSummary = document.getElementById('test-summary');
 const summaryScore = document.getElementById('summary-score');
 const summaryBreakdown = document.getElementById('summary-breakdown');
@@ -127,6 +133,8 @@ const testStageLabel = document.getElementById('test-stage-label');
 const testInputLabel = document.getElementById('test-input-label');
 const testListen = document.getElementById('test-listen');
 const testRecord = document.getElementById('test-record');
+const testRetry = document.getElementById('test-retry');
+const testSkip = document.getElementById('test-skip');
 const speakingModeWrapper = document.getElementById('speaking-mode-wrapper');
 const speakingModeSelect = document.getElementById('speaking-mode-select');
 const dictationModeWrapper = document.getElementById('dictation-mode-wrapper');
@@ -173,10 +181,67 @@ let autoNextTimer = null;
 let speakingAutoNextTimer = null;
 let isTestTransitioning = false;
 const autoNextController = createAutoNextController();
+const speechStateMachine = createSpeechStateMachine();
+const speakingTestFlow = createSpeakingTestFlowState();
+let pendingRecordingAfterPlayback = false;
+let activeSpeechPlaybackToken = 0;
+let activeSpeechSessionToken = 0;
 let editingWord = null;
 let wordSuggestionItems = [];
 let activeSuggestionIndex = -1;
 let duplicateHighlightTimer = null;
+let currentSupportSynonyms = [];
+let currentSupportAntonyms = [];
+
+function logSpeechEvent(event, detail = {}) {
+  const entry = { event, state: speechStateMachine.getState(), detail };
+  if (typeof window !== 'undefined') {
+    window.__speechDebugLog = window.__speechDebugLog || [];
+    window.__speechDebugLog.push(entry);
+  }
+  console.info('[speech]', entry);
+}
+
+function updateSpeechButtonState() {
+  if (!testListen || !testRecord) {
+    return;
+  }
+
+  const isSpeakingMode = selectedTestMode === 'speaking';
+  const isBusy = speechStateMachine.getState() !== SPEECH_STATES.IDLE;
+  const isSupported = isSpeechRecognitionSupported();
+  const shouldHideRetryOptions = !testRetry || !testSkip || !isSpeakingMode;
+
+  testListen.disabled = isBusy || !isSpeakingMode;
+  testRecord.disabled = isBusy || !isSpeakingMode || !isSupported;
+  if (shouldHideRetryOptions) {
+    testRetry?.classList.add('hidden');
+    testSkip?.classList.add('hidden');
+  }
+}
+
+function cleanupSpeechSession({ preservePending = false } = {}) {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  pendingRecordingAfterPlayback = preservePending;
+  activeSpeechPlaybackToken += 1;
+
+  const activeRecognition = speechStateMachine.getActiveRecognition();
+  if (activeRecognition) {
+    try {
+      activeRecognition.abort();
+    } catch (error) {
+      console.warn('Failed to abort recognition during cleanup', error);
+    }
+  }
+
+  speechStateMachine.clearActiveRecognition();
+  speechStateMachine.reset();
+  updateSpeechButtonState();
+  logSpeechEvent('cleanup-session');
+}
 
 function updateSoundToggleLabel() {
   if (!soundToggle) {
@@ -231,11 +296,15 @@ function clearAddFormInputFields() {
   inputWord.value = '';
   inputMeaning.value = '';
   inputIpa.value = '';
+  inputSynonyms.value = '';
+  inputAntonyms.value = '';
   inputExample.value = '';
   editingWord = null;
   addFeedback.textContent = '';
   hideWordSuggestions();
   updateDuplicateStatus();
+  currentSupportSynonyms = [];
+  currentSupportAntonyms = [];
 }
 
 function resetAddForm() {
@@ -279,6 +348,37 @@ function getWordsFromFilters(topic, subTopic) {
   }
 
   return filterVocabularyByTopic(loadVocabulary(), topic || undefined, subTopic || undefined);
+}
+
+export function sortVocabularyWords(words, sortBy = 'alphabet') {
+  const normalizedWords = [...(words || [])];
+  switch (sortBy) {
+    case 'reverse-alphabet':
+      return normalizedWords.sort((first, second) => second.word.localeCompare(first.word, undefined, { sensitivity: 'base' }));
+    case 'status':
+      return normalizedWords.sort((first, second) => {
+        const firstStatus = first.learned ? 0 : 1;
+        const secondStatus = second.learned ? 0 : 1;
+        if (firstStatus !== secondStatus) {
+          return firstStatus - secondStatus;
+        }
+        return first.word.localeCompare(second.word, undefined, { sensitivity: 'base' });
+      });
+    case 'topic':
+      return normalizedWords.sort((first, second) => {
+        const topicComparison = (first.topic || DEFAULT_TOPIC).localeCompare(second.topic || DEFAULT_TOPIC, undefined, { sensitivity: 'base' });
+        if (topicComparison !== 0) {
+          return topicComparison;
+        }
+        const subTopicComparison = (first.subTopic || DEFAULT_SUBTOPIC).localeCompare(second.subTopic || DEFAULT_SUBTOPIC, undefined, { sensitivity: 'base' });
+        if (subTopicComparison !== 0) {
+          return subTopicComparison;
+        }
+        return first.word.localeCompare(second.word, undefined, { sensitivity: 'base' });
+      });
+    default:
+      return normalizedWords.sort((first, second) => first.word.localeCompare(second.word, undefined, { sensitivity: 'base' }));
+  }
 }
 
 function getStoredTopics() {
@@ -435,7 +535,8 @@ async function renderWordList() {
   const selectedType = filterTypeSelect?.value || '';
   const filteredWords = selectedType ? words.filter((entry) => entry.type === selectedType) : words;
   const sortBy = sortBySelect?.value || 'alphabet';
-  const html = sortBy === 'topic' ? renderWordListByTopic(filteredWords) : renderWordListAlphabetically(filteredWords);
+  const sortedWords = sortVocabularyWords(filteredWords, sortBy);
+  const html = sortBy === 'topic' ? renderWordListByTopic(sortedWords) : renderWordListAlphabetically(sortedWords);
   wordList.innerHTML = html;
 }
 
@@ -470,6 +571,19 @@ function getActiveDisplayConfig() {
   return getDisplayConfig(getCurrentLanguage(), getCurrentMeaningLanguage());
 }
 
+function autoResizeTextarea(textarea) {
+  if (!textarea) {
+    return;
+  }
+
+  textarea.style.height = 'auto';
+  textarea.style.height = `${Math.max(textarea.scrollHeight, 92)}px`;
+}
+
+function syncExampleTextareaHeights() {
+  [inputExample].forEach((textarea) => autoResizeTextarea(textarea));
+}
+
 function updateDynamicLabels() {
   const config = getActiveDisplayConfig();
   const termLabel = document.querySelector('[data-field-label="term"]');
@@ -481,7 +595,9 @@ function updateDynamicLabels() {
   const learnExampleLabel = document.querySelector('[data-display-label="example"]');
   const termInput = document.getElementById('input-word');
   const meaningInput = document.getElementById('input-meaning');
-  const pronunciationInput = document.getElementById('input-ipa');
+  const ipaInput = document.getElementById('input-ipa');
+  const synonymInput = document.getElementById('input-synonyms');
+  const antonymInput = document.getElementById('input-antonyms');
   const exampleInput = document.getElementById('input-example');
 
   if (termLabel) {
@@ -511,28 +627,144 @@ function updateDynamicLabels() {
   if (meaningInput) {
     meaningInput.placeholder = config.meaningPlaceholder || '';
   }
-  if (pronunciationInput) {
-    pronunciationInput.placeholder = config.pronunciationPlaceholder || '';
+  if (ipaInput) {
+    ipaInput.placeholder = config.pronunciationPlaceholder || '';
+  }
+  // definition and collocations removed from form
+  if (synonymInput) {
+    synonymInput.placeholder = config.synonymPlaceholder || '';
+  }
+  if (antonymInput) {
+    antonymInput.placeholder = config.antonymPlaceholder || '';
   }
   if (exampleInput) {
     exampleInput.placeholder = config.exampleHint || '';
   }
+  syncExampleTextareaHeights();
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderSupportTable(items, title) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return '';
+  }
+
+  const headerLabel = title === 'Từ đồng nghĩa' ? 'Từ đồng nghĩa' : 'Từ trái nghĩa';
+  return `
+    <div class="support-table-wrapper">
+      <div class="support-table-title">${title}</div>
+      <table class="support-table">
+        <thead>
+          <tr>
+            <th>STT</th>
+            <th>${headerLabel}</th>
+            <th>Nghĩa</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items
+            .map(
+              (item, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  <td>${escapeHtml(item.word || item.text || item.label || '')}</td>
+                  <td>${escapeHtml(item.meaning || item.translation || item.definition || '')}</td>
+                </tr>
+              `,
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function mergeSupportLists(currentList = [], parsedList = []) {
+  const existingMap = new Map(
+    normalizeSupportList(currentList).map((item) => [normalizeWordKey(item.word), item]),
+  );
+
+  const merged = new Map(existingMap);
+  normalizeSupportList(parsedList).forEach((item) => {
+    const key = normalizeWordKey(item.word);
+    if (!key) {
+      return;
+    }
+    const existing = existingMap.get(key);
+    merged.set(key, {
+      word: String(item.word || '').trim(),
+      meaning: String(item.meaning || (existing && existing.meaning) || '').trim(),
+    });
+  });
+
+  return Array.from(merged.values()).filter((entry) => entry && entry.word);
+}
+
+function normalizeSupportList(items) {
+  if (!items) {
+    return [];
+  }
+
+  if (Array.isArray(items)) {
+    return items
+      .map((item) => {
+        if (!item && item !== 0) {
+          return null;
+        }
+        if (typeof item === 'string') {
+          return { word: item.trim(), meaning: '' };
+        }
+        if (typeof item === 'object' && item !== null) {
+          return {
+            word: String(item.word || item.text || item.label || '').trim(),
+            meaning: String(item.meaning || item.translation || item.definition || '').trim(),
+          };
+        }
+        return null;
+      })
+      .filter((entry) => entry && entry.word);
+  }
+
+  if (typeof items === 'string') {
+    return items
+      .split(/\n|,|;/)
+      .map((item) => ({ word: String(item || '').trim(), meaning: '' }))
+      .filter((entry) => entry.word);
+  }
+
+  return [];
 }
 
 function renderWordCard(entry) {
   const config = getActiveDisplayConfig();
   const meaningValue = getMeaningDisplayValue(entry, getCurrentMeaningLanguage());
+  const exampleValue = entry.example || entry.basicExample || entry.examples?.basic || entry.examples?.example || '';
+  const synonyms = normalizeSupportList(entry.synonyms);
+  const antonyms = normalizeSupportList(entry.antonyms);
   return `
-    <div class="word-item" data-word="${entry.word}" data-doc-id="${entry.docId || ''}">
+    <div class="word-item" data-word="${escapeHtml(entry.word)}" data-doc-id="${escapeHtml(entry.docId || '')}">
       <div>
-        <h3>${entry.word}</h3>
-        <p><strong>Type:</strong> ${entry.type || DEFAULT_TYPE}</p>
-        <p><strong>Topic:</strong> ${entry.topic}</p>
-        <p><strong>Sub Topic:</strong> ${entry.subTopic}</p>
-        <p><strong>${config.meaningLabel}:</strong> ${meaningValue}</p>
-        <p><strong>${config.exampleLabel}:</strong> ${entry.example}</p>
-        <p><strong>${config.pronunciationLabel}:</strong> ${entry.ipa || entry.pronunciation || '—'}</p>
+        <h3>${escapeHtml(entry.word)}</h3>
+        <p><strong>Type:</strong> ${escapeHtml(entry.type || DEFAULT_TYPE)}</p>
+        <p><strong>Topic:</strong> ${escapeHtml(entry.topic)}</p>
+        <p><strong>Sub Topic:</strong> ${escapeHtml(entry.subTopic)}</p>
+        <p><strong>${config.meaningLabel}:</strong> ${escapeHtml(meaningValue)}</p>
+        <p class="word-example"><strong>${config.exampleLabel}:</strong> ${escapeHtml(exampleValue || '—')}</p>
+        <p><strong>${config.pronunciationLabel}:</strong> ${escapeHtml(entry.ipa || entry.pronunciation || '—')}</p>
         <p><strong>Trạng thái:</strong> ${entry.learned ? 'Đã thuộc' : 'Chưa thuộc'}</p>
+        <!-- Common Collocations removed per refactor -->
+      </div>
+      <div class="word-support-tables">
+        ${renderSupportTable(synonyms, 'Từ đồng nghĩa')}
+        ${renderSupportTable(antonyms, 'Từ trái nghĩa')}
       </div>
       <div class="word-actions">
         <button type="button" class="edit-word secondary-button">✏ Edit</button>
@@ -549,7 +781,7 @@ function renderWordListAlphabetically(words) {
 
   const sortedWords = [...words].sort((first, second) => first.word.localeCompare(second.word, undefined, { sensitivity: 'base' }));
   const grouped = sortedWords.reduce((acc, entry) => {
-    const letter = (entry.word.charAt(0) || '#').toUpperCase();
+    const letter = entry.word ? entry.word.charAt(0).toUpperCase() : '';
     if (!acc[letter]) {
       acc[letter] = [];
     }
@@ -567,7 +799,6 @@ function renderWordListAlphabetically(words) {
     `)
     .join('');
 }
-
 function renderWordListByTopic(words) {
   if (!words.length) {
     return '<p class="feedback">Chưa có từ nào. Thêm từ ngay để bắt đầu học.</p>';
@@ -916,18 +1147,37 @@ function setSelectedTestMode(mode) {
   if (mode === 'speaking' && !isSpeechRecognitionSupported()) {
     testRecord.disabled = true;
     testModeHint.textContent = getSpeechRecognitionUnsupportedMessage();
+    updateSpeechButtonState();
     return;
   }
 
   testRecord.disabled = false;
   testModeHint.textContent = mode === 'speaking' ? 'Chế độ Speaking Test đã được chọn.' : 'Chế độ Dictation Test đã được chọn.';
+  updateSpeechButtonState();
 }
 
 function stopVoiceRecognition() {
   if (testRecognition) {
-    testRecognition.stop();
+    try {
+      testRecognition.stop();
+    } catch (error) {
+      console.warn('Failed to stop recognition', error);
+    }
   }
   testRecognition = null;
+}
+
+function prepareSpeechSession() {
+  activeSpeechSessionToken += 1;
+  const token = activeSpeechSessionToken;
+  cleanupSpeechSession({ preservePending: false });
+  return token;
+}
+
+function finalizeSpeechResult() {
+  speechStateMachine.finishResult();
+  updateSpeechButtonState();
+  logSpeechEvent('result-finalized');
 }
 
 // Use Web Speech Synthesis to read the target word or example sentence.
@@ -936,19 +1186,44 @@ function speakText(text, rate = 0.8) {
     return false;
   }
 
+  const sessionToken = prepareSpeechSession();
   const synth = window.speechSynthesis;
+  const playbackResult = speechStateMachine.beginPlayback();
+  if (!playbackResult.allowed) {
+    logSpeechEvent('playback-blocked', { reason: playbackResult.reason });
+    return false;
+  }
+
+  updateSpeechButtonState();
+  logSpeechEvent('playback-started', { text });
   synth.cancel();
   const utterance = createSpeechUtterance(text, getCurrentLanguage(), { rate, pitch: 1 });
   utterance.onstart = () => {
     testMessage.textContent = 'Đang phát âm...';
+    logSpeechEvent('utterance-started', { sessionToken });
   };
   utterance.onerror = () => {
     testMessage.textContent = 'Không thể phát âm nội dung này lúc này.';
+    if (sessionToken === activeSpeechSessionToken) {
+      speechStateMachine.endPlayback();
+      updateSpeechButtonState();
+      logSpeechEvent('utterance-error', { sessionToken });
+    }
   };
   utterance.onend = () => {
+    if (sessionToken !== activeSpeechSessionToken) {
+      return;
+    }
+    speechStateMachine.endPlayback();
+    if (pendingRecordingAfterPlayback) {
+      pendingRecordingAfterPlayback = false;
+      processTestRecording();
+    }
     if (selectedTestMode === 'speaking') {
       testMessage.textContent = 'Sẵn sàng.';
     }
+    updateSpeechButtonState();
+    logSpeechEvent('utterance-ended', { sessionToken });
   };
   synth.speak(utterance);
   return true;
@@ -965,24 +1240,56 @@ function speakSpeakingPrompt(entry) {
     return;
   }
 
+  const sessionToken = prepareSpeechSession();
   const synth = window.speechSynthesis;
+  const playbackResult = speechStateMachine.beginPlayback();
+  if (!playbackResult.allowed) {
+    logSpeechEvent('playback-blocked', { reason: playbackResult.reason });
+    return;
+  }
+
+  updateSpeechButtonState();
+  logSpeechEvent('playback-started', { promptText, sessionToken });
   synth.cancel();
   const utterance = createSpeechUtterance(promptText, getCurrentLanguage(), { rate: 0.8, pitch: 1 });
   utterance.onstart = () => {
     testMessage.textContent = 'Đang phát âm...';
+    logSpeechEvent('utterance-started', { sessionToken });
   };
   utterance.onerror = () => {
     testMessage.textContent = 'Không thể phát âm yêu cầu này lúc này.';
+    if (sessionToken === activeSpeechSessionToken) {
+      speechStateMachine.endPlayback();
+      updateSpeechButtonState();
+      logSpeechEvent('utterance-error', { sessionToken });
+    }
   };
   utterance.onend = () => {
+    if (sessionToken !== activeSpeechSessionToken) {
+      return;
+    }
+    speechStateMachine.endPlayback();
+    if (pendingRecordingAfterPlayback) {
+      pendingRecordingAfterPlayback = false;
+      processTestRecording();
+    }
     testMessage.textContent = 'Sẵn sàng.';
+    updateSpeechButtonState();
+    logSpeechEvent('utterance-ended', { sessionToken });
   };
   synth.speak(utterance);
 }
 
 function updateTestProgress() {
   const totalQuestions = Math.max(testQueue.length, 1);
-  testCounter.textContent = `Câu ${currentTestIndex + 1} / ${testQueue.length}`;
+  const currentEntry = testQueue[currentTestIndex];
+  const totalGroups = Math.max(new Set(testQueue.map((entry) => entry.groupIndex ?? 0)).size, 1);
+  const groupIndex = currentEntry?.groupIndex ?? 0;
+  const groupSize = currentEntry?.groupSize || 1;
+  const groupPosition = currentEntry?.groupPosition || 1;
+
+  testCounter.textContent = `Word Group ${groupIndex + 1} / ${totalGroups}`;
+  testProgressDetail.textContent = `Current ${groupPosition} / ${groupSize}`;
   const progressPercent = Math.round(((currentTestIndex + 1) / totalQuestions) * 100);
   testProgress.style.width = `${progressPercent}%`;
 }
@@ -990,12 +1297,14 @@ function updateTestProgress() {
 function showTestSummary() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  cleanupSpeechSession({ preservePending: false });
   isTestTransitioning = false;
   const totalChecks = testScore + testWrong;
   const accuracy = totalChecks ? Math.round((testScore / totalChecks) * 100) : 0;
+  const summaryStats = speakingTestFlow.getSummaryStats();
   testSummary.classList.remove('hidden');
   summaryScore.textContent = `Correct: ${testScore} | Wrong: ${testWrong}`;
-  summaryBreakdown.textContent = `Accuracy: ${accuracy}%`;
+  summaryBreakdown.textContent = `Accuracy: ${accuracy}% | Skipped: ${summaryStats.skipped}`;
   testSubmit.classList.add('hidden');
   testNext.classList.add('hidden');
   testAnswer.classList.add('hidden');
@@ -1008,12 +1317,12 @@ function showTestSummary() {
 function updateTestDisplay() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  cleanupSpeechSession({ preservePending: false });
   isTestTransitioning = false;
   const currentEntry = testQueue[currentTestIndex];
   if (!currentEntry) {
     return;
   }
-
   if (selectedTestMode === 'speaking') {
     selectedSpeakingMode = normalizeSpeakingMode(speakingModeSelect?.value || selectedSpeakingMode);
     testModeLabel.textContent = 'Mode: Speaking Test';
@@ -1028,6 +1337,8 @@ function updateTestDisplay() {
     testListen.classList.remove('hidden');
     testSubmit.classList.add('hidden');
     testNext.classList.add('hidden');
+    testRetry?.classList.add('hidden');
+    testSkip?.classList.add('hidden');
     testListen.disabled = false;
     testRecord.disabled = false;
     testSubmit.disabled = false;
@@ -1084,6 +1395,7 @@ function resetLearnSession() {
 function resetTestSession() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  cleanupSpeechSession({ preservePending: false });
   isTestTransitioning = false;
   testQueue = [];
   currentTestIndex = 0;
@@ -1093,7 +1405,11 @@ function resetTestSession() {
   dictationStage = 'word';
   testAnswer.value = '';
   testMessage.textContent = '';
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
   testNext.classList.add('hidden');
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
   testSubmit.classList.remove('hidden');
   testSummary.classList.add('hidden');
   testAnswer.classList.remove('hidden');
@@ -1185,7 +1501,86 @@ function replayLearnWord() {
   speakLearnWord(currentEntry);
 }
 
+function handleSpeakingTestFailure() {
+  const entry = testQueue[currentTestIndex];
+  if (!entry || selectedTestMode !== 'speaking') {
+    return;
+  }
+
+  const questionKey = `${entry.word}:${currentTestIndex}`;
+  const failureResult = speakingTestFlow.handleFailure(questionKey);
+  const attempt = failureResult.attempt;
+
+  if (failureResult.showRetryOptions) {
+    testMessage.textContent = failureResult.message;
+    testRecord.disabled = true;
+    testListen.disabled = true;
+    testRetry?.classList.remove('hidden');
+    testSkip?.classList.remove('hidden');
+    testNext.classList.add('hidden');
+  } else {
+    testMessage.textContent = failureResult.message;
+    testRetry?.classList.add('hidden');
+    testSkip?.classList.add('hidden');
+    testRecord.disabled = false;
+    testListen.disabled = false;
+  }
+
+  if (attempt > 0) {
+    testMessage.textContent = `${failureResult.message} Attempt: ${attempt}/3`;
+  }
+}
+
+function handleSpeakingTestSuccess() {
+  const entry = testQueue[currentTestIndex];
+  if (!entry || selectedTestMode !== 'speaking') {
+    return;
+  }
+
+  const questionKey = `${entry.word}:${currentTestIndex}`;
+  speakingTestFlow.handleSuccess(questionKey);
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
+}
+
+function handleSpeakingTestRetry() {
+  const entry = testQueue[currentTestIndex];
+  if (!entry || selectedTestMode !== 'speaking') {
+    return;
+  }
+
+  const questionKey = `${entry.word}:${currentTestIndex}`;
+  speakingTestFlow.handleRetry(questionKey);
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
+  testRecord.disabled = false;
+  testListen.disabled = false;
+  testMessage.textContent = 'Sẵn sàng để thử lại.';
+  logSpeechEvent('speaking-retry');
+}
+
+function handleSpeakingTestSkip() {
+  const entry = testQueue[currentTestIndex];
+  if (!entry || selectedTestMode !== 'speaking') {
+    return;
+  }
+
+  const questionKey = `${entry.word}:${currentTestIndex}`;
+  speakingTestFlow.skipCurrentQuestion(questionKey);
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
+  testRecord.disabled = true;
+  testListen.disabled = true;
+  testMessage.textContent = 'Đã bỏ qua câu hỏi này.';
+  proceedToNextTestQuestion();
+}
+
 function processTestListening() {
+  if (speechStateMachine.getState() !== SPEECH_STATES.IDLE) {
+    logSpeechEvent('listen-blocked', { reason: 'busy' });
+    return;
+  }
+
   const entry = testQueue[currentTestIndex];
   if (!entry) {
     return;
@@ -1210,8 +1605,21 @@ function processTestRecording() {
     return;
   }
 
+  if (speechStateMachine.getState() === SPEECH_STATES.PLAYING_AUDIO) {
+    pendingRecordingAfterPlayback = true;
+    logSpeechEvent('recording-queued-after-playback');
+    return;
+  }
+
+  const stateResult = speechStateMachine.beginRecording();
+  if (!stateResult.allowed) {
+    logSpeechEvent('recording-blocked', { reason: stateResult.reason });
+    return;
+  }
+
   const SpeechRecognition = getSpeechRecognitionConstructor();
   if (!SpeechRecognition) {
+    speechStateMachine.reset();
     testMessage.textContent = getSpeechRecognitionUnsupportedMessage();
     testRecord.disabled = true;
     console.error('SpeechRecognition is not available in this browser.', window);
@@ -1220,20 +1628,29 @@ function processTestRecording() {
 
   testMessage.textContent = 'Đang nghe...';
   testRecord.textContent = '🎤 Listening...';
+  updateSpeechButtonState();
+  logSpeechEvent('recording-started');
 
   if (testRecognition) {
-    testRecognition.stop();
+    try {
+      testRecognition.stop();
+    } catch (error) {
+      console.warn('Failed to stop previous recognition', error);
+    }
   }
+
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
 
   void requestMicrophoneAccess().then(({ success, reason, error }) => {
     if (!success) {
+      speechStateMachine.reset();
       testMessage.textContent = reason === 'NotAllowedError' || reason === 'PermissionDeniedError' || reason === 'not-allowed'
         ? 'Bạn cần cấp quyền Microphone để sử dụng Speaking Test.'
         : getSpeechRecognitionUnsupportedMessage();
       testRecord.textContent = '🎤 Record';
+      updateSpeechButtonState();
       console.error('Microphone access request was denied or unavailable.', { reason, error });
       return;
     }
@@ -1243,7 +1660,13 @@ function processTestRecording() {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
+    recognition.onstart = () => {
+      logSpeechEvent('recognition-started');
+    };
+
     recognition.onresult = (event) => {
+      speechStateMachine.beginProcessing();
+      updateSpeechButtonState();
       const transcript = Array.from(event.results)
         .map((result) => result[0].transcript)
         .join(' ');
@@ -1259,15 +1682,18 @@ function processTestRecording() {
         testSubmit.disabled = true;
         testNext.classList.remove('hidden');
         testRecord.textContent = '🎤 Record';
+        handleSpeakingTestSuccess();
         void playCorrectSound();
         startSpeakingAutoNext();
       } else {
         testWrong += 1;
         testMessage.textContent = `❌ Incorrect. Đáp án đúng: ${expected}`;
         testNext.classList.add('hidden');
+        handleSpeakingTestFailure();
         playWrongSound();
       }
 
+      finalizeSpeechResult();
       testRecord.textContent = '🎤 Record';
     };
 
@@ -1276,13 +1702,24 @@ function processTestRecording() {
       console.error('Speech recognition error', { errorCode, event });
       testMessage.textContent = getSpeechRecognitionErrorMessage(errorCode);
       testRecord.textContent = '🎤 Record';
+      if (selectedTestMode === 'speaking') {
+        handleSpeakingTestFailure();
+      }
+      speechStateMachine.reset();
+      updateSpeechButtonState();
     };
 
     recognition.onend = () => {
-      testRecognition = null;
+      if (testRecognition === recognition) {
+        testRecognition = null;
+      }
+      speechStateMachine.reset();
       testRecord.textContent = '🎤 Record';
+      updateSpeechButtonState();
+      logSpeechEvent('recognition-ended');
     };
 
+    speechStateMachine.setActiveRecognition(recognition);
     testRecognition = recognition;
     recognition.start();
   });
@@ -1322,15 +1759,26 @@ function processTestSubmission() {
     testAnswer.setAttribute('aria-disabled', 'true');
     testSubmit.disabled = true;
     testListen.disabled = true;
+    testSkip?.classList.add('hidden');
     if (selectedTestMode === 'dictation') {
       startAutoNext();
     }
   } else {
     dictationWrongAttempts += 1;
     testWrong += 1;
-    testMessage.textContent = feedback;
+    const questionKey = `${entry.word}:${currentTestIndex}`;
+    const failureResult = speakingTestFlow.handleFailure(questionKey);
+    if (failureResult.showRetryOptions) {
+      testMessage.textContent = `${feedback} ${failureResult.message}`;
+      testSkip?.classList.remove('hidden');
+      testSubmit.disabled = true;
+      testAnswer.focus();
+    } else {
+      testMessage.textContent = feedback;
+      testSkip?.classList.add('hidden');
+      testAnswer.focus();
+    }
     playWrongSound();
-    testAnswer.focus();
   }
 }
 
@@ -1342,6 +1790,12 @@ function proceedToNextTestQuestion() {
   isTestTransitioning = true;
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  cleanupSpeechSession({ preservePending: false });
+  const entry = testQueue[currentTestIndex];
+  if (selectedTestMode === 'speaking' && entry) {
+    const questionKey = `${entry.word}:${currentTestIndex}`;
+    speakingTestFlow.handleSuccess(questionKey);
+  }
 
   if (selectedTestMode === 'dictation') {
     dictationStage = 'word';
@@ -1394,6 +1848,7 @@ function startLearnSession() {
 function startTestSession() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
+  cleanupSpeechSession({ preservePending: false });
   if (!selectedTestMode) {
     testFeedback.textContent = 'Vui lòng chọn một chế độ Test trước.';
     return;
@@ -1417,6 +1872,8 @@ function startTestSession() {
   updateTestDisplay();
   testSummary.classList.add('hidden');
   testSubmit.classList.remove('hidden');
+  testRetry?.classList.add('hidden');
+  testSkip?.classList.add('hidden');
   testNext.classList.add('hidden');
   testMessage.textContent = '';
   testAnswer.value = '';
@@ -1550,6 +2007,7 @@ function startEditMode(entry) {
 
   const topic = entry.topic || DEFAULT_TOPIC;
   const subTopic = entry.subTopic || DEFAULT_SUBTOPIC;
+  const exampleValue = entry.example || entry.basicExample || entry.examples?.basic || entry.examples?.example || '';
   refreshAddFormTopicList(topic);
   inputTopic.value = topic;
   refreshAddFormSubtopicList(topic, subTopic);
@@ -1558,10 +2016,85 @@ function startEditMode(entry) {
   inputWord.value = entry.word || '';
   inputMeaning.value = getMeaningValue(entry, getCurrentMeaningLanguage()) || '';
   inputIpa.value = entry.ipa || '';
-  inputExample.value = entry.example || '';
+  // definition removed from form
+  const normalizedSynonyms = normalizeSupportList(entry.synonyms);
+  const normalizedAntonyms = normalizeSupportList(entry.antonyms);
+  inputSynonyms.value = normalizedSynonyms.map((s) => s.word).join(', ');
+  inputAntonyms.value = normalizedAntonyms.map((s) => s.word).join(', ');
+  currentSupportSynonyms = normalizedSynonyms;
+  currentSupportAntonyms = normalizedAntonyms;
+  inputExample.value = exampleValue;
+  syncExampleTextareaHeights();
   hideWordSuggestions();
   updateDuplicateStatus();
   inputWord.focus();
+}
+
+async function applyGeneratedSupportData(word) {
+  if (!word || !generateSupportDataButton) {
+    return;
+  }
+
+  generateSupportDataButton.disabled = true;
+  generateSupportDataButton.textContent = '⏳ Đang tạo...';
+  addFeedback.textContent = 'Đang đề xuất dữ liệu hỗ trợ...';
+
+  try {
+    const suggestion = await fetchWordSupportData(word, {
+      language: getCurrentLanguage(),
+      topic: inputTopic.value && inputTopic.value !== ADD_TOPIC_VALUE ? inputTopic.value : '',
+      subTopic: inputSubtopic.value && inputSubtopic.value !== SUBTOPIC_NOT_SELECTED_VALUE ? inputSubtopic.value : '',
+      meaning: inputMeaning.value.trim(),
+    });
+    if (!inputIpa.value.trim() && suggestion.ipa) {
+      inputIpa.value = suggestion.ipa;
+    }
+    if (!inputMeaning.value.trim() && suggestion.meaning) {
+      inputMeaning.value = suggestion.meaning;
+    }
+    // definition removed from form; only fill ipa, meaning, synonyms, antonyms, example
+    if (!inputSynonyms.value.trim() && suggestion.synonyms?.length) {
+      inputSynonyms.value = suggestion.synonyms
+        .map((item) => (typeof item === 'object' ? item.word : item))
+        .filter(Boolean)
+        .join(', ');
+      currentSupportSynonyms = normalizeSupportList(suggestion.synonyms);
+    }
+    const generatedSynonyms = normalizeSupportList(suggestion.synonyms);
+    const generatedAntonyms = normalizeSupportList(suggestion.antonyms);
+    currentSupportSynonyms = mergeSupportLists(currentSupportSynonyms, generatedSynonyms);
+    currentSupportAntonyms = mergeSupportLists(currentSupportAntonyms, generatedAntonyms);
+
+    if (!inputSynonyms.value.trim() && suggestion.synonyms?.length) {
+      inputSynonyms.value = suggestion.synonyms
+        .map((item) => (typeof item === 'object' ? item.word : item))
+        .filter(Boolean)
+        .join(', ');
+    }
+    if (!inputAntonyms.value.trim() && suggestion.antonyms?.length) {
+      inputAntonyms.value = suggestion.antonyms
+        .map((item) => (typeof item === 'object' ? item.word : item))
+        .filter(Boolean)
+        .join(', ');
+    }
+    // collocations removed from form
+    const generatedExampleValue = suggestion.example
+      || suggestion.examples?.basic
+      || suggestion.basicExample
+      || suggestion.conversationExample
+      || suggestion.lessonExample
+      || '';
+    if (!inputExample.value.trim() && generatedExampleValue) {
+      inputExample.value = generatedExampleValue;
+    }
+    syncExampleTextareaHeights();
+    addFeedback.textContent = 'Đề xuất dữ liệu hỗ trợ đã sẵn sàng. Bạn có thể chỉnh sửa trước khi lưu.';
+  } catch (error) {
+    addFeedback.textContent = 'Không thể tạo dữ liệu hỗ trợ lúc này.';
+  } finally {
+    generateSupportDataButton.disabled = false;
+    generateSupportDataButton.textContent = '✨ Tự động';
+  }
 }
 
 function bindEvents() {
@@ -1574,13 +2107,21 @@ function bindEvents() {
     const word = inputWord.value.trim();
     const meaning = inputMeaning.value.trim();
     const meanings = buildMeaningMap((editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null)?.meanings || {}, getCurrentMeaningLanguage(), meaning);
-    const example = inputExample.value.trim();
     let ipa = inputIpa.value.trim();
+    const parsedSynonyms = normalizeSupportList(inputSynonyms.value);
+    const parsedAntonyms = normalizeSupportList(inputAntonyms.value);
+    const synonyms = mergeSupportLists(currentSupportSynonyms, parsedSynonyms);
+    const antonyms = mergeSupportLists(currentSupportAntonyms, parsedAntonyms);
+    const needsSupportEnrichment = (items) => Array.isArray(items) && items.some((item) => item && item.word && !item.meaning);
+    const enrichedSynonyms = needsSupportEnrichment(synonyms) ? await enrichSupportEntriesWithMeanings(synonyms) : synonyms;
+    const enrichedAntonyms = needsSupportEnrichment(antonyms) ? await enrichSupportEntriesWithMeanings(antonyms) : antonyms;
+    const example = inputExample.value.trim();
+    const examples = { basic: example };
     let topic = inputTopic.value;
     let subTopic = inputSubtopic.value;
     let type = inputType?.value || DEFAULT_TYPE;
 
-    if (!word || !meaning || !example) {
+    if (!word || !meaning) {
       addFeedback.textContent = 'Vui lòng nhập đủ thông tin.';
       return;
     }
@@ -1621,10 +2162,10 @@ function bindEvents() {
 
     try {
       if (editingWord) {
-        await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, topic, subTopic, type, meanings });
+          await updateVocabularyEntryByWord(editingWord, { word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, topic, subTopic, type, meanings, examples });
         addFeedback.textContent = 'Cập nhật thành công.';
       } else {
-        await addVocabularyEntry({ word, meaning, example, ipa, topic, subTopic, type, meanings });
+          await addVocabularyEntry({ word, meaning, example, ipa, synonyms: enrichedSynonyms, antonyms: enrichedAntonyms, topic, subTopic, type, meanings, examples });
         addFeedback.textContent = 'Lưu từ thành công.';
       }
 
@@ -1646,6 +2187,12 @@ function bindEvents() {
     activeSuggestionIndex = -1;
     renderWordSuggestions();
     updateDuplicateStatus();
+  });
+
+  inputExample?.addEventListener('input', () => autoResizeTextarea(inputExample));
+
+  generateSupportDataButton?.addEventListener('click', () => {
+    void applyGeneratedSupportData(inputWord.value.trim());
   });
 
   inputWord.addEventListener('focus', () => {
@@ -1919,6 +2466,8 @@ function bindEvents() {
   testRecord.addEventListener('click', processTestRecording);
   testSubmit.addEventListener('click', processTestSubmission);
   testNext.addEventListener('click', proceedToNextTestQuestion);
+  testRetry?.addEventListener('click', handleSpeakingTestRetry);
+  testSkip?.addEventListener('click', handleSpeakingTestSkip);
   soundToggle?.addEventListener('click', () => {
     setSoundEnabled(!soundEnabled);
   });

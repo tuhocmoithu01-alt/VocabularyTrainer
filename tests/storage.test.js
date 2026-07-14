@@ -20,6 +20,66 @@ test('createVocabularyEntry defaults the type to Word when none provided', () =>
   assert.equal(entry.topic, 'Education');
 });
 
+test('createVocabularyEntry preserves support data as object arrays', () => {
+  const entry = createVocabularyEntry('problem', 'vấn đề', 'This is a problem.', '/ˈprɑːbləm/', 'Education', 'School', 'Word', {}, ['issue', 'difficulty'], ['solution', 'answer'], 'something difficult that needs to be solved');
+
+  assert.deepEqual(entry.synonyms, [{ word: 'issue', meaning: '' }, { word: 'difficulty', meaning: '' }]);
+  assert.deepEqual(entry.antonyms, [{ word: 'solution', meaning: '' }, { word: 'answer', meaning: '' }]);
+});
+
+test('createVocabularyEntry normalizes the compact Examples structure', () => {
+  const entry = createVocabularyEntry(
+    'schedule',
+    'sắp xếp lịch',
+    'This is a basic example.',
+    '/ˈʃedjuːl/',
+    'Education',
+    'School',
+    'Word',
+    {},
+    ['arrange', 'plan'],
+    ['cancel', 'delay'],
+    'to arrange something for a specific time',
+    'Business Meeting',
+    '',
+    [],
+    {},
+    { basic: 'Please schedule the meeting.', conversation: 'Can we schedule a call?', lessonContext: 'We will schedule the meeting tomorrow.' },
+  );
+
+  assert.deepEqual(entry.examples, {
+    basic: 'Please schedule the meeting.',
+    conversation: 'Can we schedule a call?',
+    lessonContext: 'We will schedule the meeting tomorrow.',
+  });
+  assert.equal(entry.example, 'Please schedule the meeting.');
+});
+
+import { toFirestorePayload } from '../storage.js';
+
+test('toFirestorePayload preserves the canonical example and drops legacy example fields', () => {
+  const entry = createVocabularyEntry(
+    'test',
+    'kiểm tra',
+    'One example sentence.',
+    '/tɛst/',
+    'Education',
+    'School',
+    'Word',
+    {},
+    ['trial'],
+    ['ignore'],
+    'a procedure for evaluation',
+    [],
+    { basic: 'One example sentence.' },
+  );
+
+  const payload = toFirestorePayload(entry);
+
+  assert.equal(payload.example, 'One example sentence.');
+  assert.deepEqual(payload.examples, { basic: 'One example sentence.' });
+});
+
 test('language manager switches collections by language and exposes options', () => {
   setCurrentLanguage('english');
   assert.equal(getCurrentLanguage(), 'english');

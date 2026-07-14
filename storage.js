@@ -164,6 +164,52 @@ function deriveSubTopics(words) {
   return [...new Set(words.map((entry) => entry.subTopic || DEFAULT_SUBTOPIC))].filter(Boolean).sort();
 }
 
+function normalizeSupportObjectList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') {
+          const word = String(item || '').trim();
+          return word ? { word, meaning: '' } : null;
+        }
+        if (typeof item === 'object' && item !== null) {
+          const word = String(item.word || item.text || item.label || '').trim();
+          const meaning = String(item.meaning || item.translation || item.definition || '').trim();
+          return word ? { word, meaning } : null;
+        }
+        return null;
+      })
+      .filter((item) => item && item.word);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\n|,|;/)
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .map((word) => ({ word, meaning: '' }));
+  }
+
+  return [];
+}
+
+function normalizeStringList(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\n|,|;/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
   const normalizedTypeValue = entry?.type ? String(entry.type).trim() : DEFAULT_TYPE;
   const normalizedType = normalizedTypeValue
@@ -177,14 +223,37 @@ function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
 
   const meanings = normalizeMeaningMap(entry?.meanings || entry?.meaning);
   const legacyMeaningValue = meanings.vietnamese || meanings.vi || entry?.meaning || '';
+  const synonyms = normalizeSupportObjectList(entry?.synonyms);
+  const antonyms = normalizeSupportObjectList(entry?.antonyms);
+  const legacyExamples = entry?.examples && typeof entry.examples === 'object' && !Array.isArray(entry.examples) ? entry.examples : {};
+  const exampleValue = String(
+    entry?.example ||
+    legacyExamples.example ||
+    legacyExamples.basic ||
+    legacyExamples.basicExample ||
+    legacyExamples.conversation ||
+    legacyExamples.conversationExample ||
+    legacyExamples.lessonContext ||
+    legacyExamples.lessonExample ||
+    entry?.basicExample ||
+    entry?.conversationExample ||
+    entry?.lessonExample ||
+    '',
+  ).trim();
+  const examples = {
+    basic: exampleValue,
+  };
   return {
     ...entry,
     docId: entry?.docId ? String(entry.docId).trim() : '',
     word: entry?.word ? String(entry.word).trim() : '',
     meanings,
     meaning: legacyMeaningValue,
-    example: entry?.example ? String(entry.example).trim() : '',
+    example: exampleValue,
     ipa: entry?.ipa ? String(entry.ipa).trim() : '',
+    synonyms,
+    antonyms,
+    examples,
     topic: normalizedTopic,
     subTopic: normalizedSubTopic,
     type: normalizedType || DEFAULT_TYPE,
@@ -213,13 +282,17 @@ function updateDerivedCaches(words, language = activeLanguage) {
   activeLanguage = normalizeLanguageCode(language);
 }
 
-function toFirestorePayload(entry) {
+export function toFirestorePayload(entry) {
+  const exampleValue = String(entry.example || entry.examples?.basic || entry.basicExample || '').trim();
   return {
     word: entry.word,
     meanings: normalizeMeaningMap(entry.meanings || entry.meaning),
     meaning: entry.meaning,
-    example: entry.example,
+    example: exampleValue,
     ipa: entry.ipa,
+    synonyms: normalizeSupportObjectList(entry.synonyms),
+    antonyms: normalizeSupportObjectList(entry.antonyms),
+    examples: entry.examples && typeof entry.examples === 'object' ? { basic: String(entry.examples.basic || entry.example || '').trim() } : { basic: exampleValue },
     topic: entry.topic,
     subTopic: entry.subTopic,
     type: entry.type,
@@ -795,15 +868,61 @@ export function createVocabularyEntry(
   subTopic = DEFAULT_SUBTOPIC,
   type = DEFAULT_TYPE,
   meanings = {},
+  synonyms = [],
+  antonyms = [],
+  definition = '',
+  collocations = [],
+  basicExample = '',
+  conversationExample = '',
+  lessonExample = '',
+  examples = null,
 ) {
   const normalizedMeanings = normalizeMeaningMap(meanings || meaning);
   const fallbackMeaning = normalizedMeanings.vietnamese || normalizedMeanings.vi || String(meaning || '').trim();
+  const legacyExamplePayload = examples && typeof examples === 'object' && !Array.isArray(examples)
+    ? examples
+    : (typeof lessonExample === 'object' && lessonExample !== null && !Array.isArray(lessonExample))
+      ? lessonExample
+      : (typeof conversationExample === 'object' && conversationExample !== null && !Array.isArray(conversationExample))
+        ? conversationExample
+        : (typeof basicExample === 'object' && basicExample !== null && !Array.isArray(basicExample))
+          ? basicExample
+          : null;
+  const exampleBasic = String(
+    legacyExamplePayload?.basic ||
+    legacyExamplePayload?.basicExample ||
+    legacyExamplePayload?.example ||
+    example ||
+    basicExample ||
+    conversationExample ||
+    lessonExample ||
+    '',
+  ).trim();
+  const exampleConversation = String(
+    legacyExamplePayload?.conversation ||
+    legacyExamplePayload?.conversationExample ||
+    '',
+  ).trim();
+  const exampleLessonContext = String(
+    legacyExamplePayload?.lessonContext ||
+    legacyExamplePayload?.lessonExample ||
+    '',
+  ).trim();
+  const normalizedExamples = {
+    basic: exampleBasic,
+    conversation: exampleConversation,
+    lessonContext: exampleLessonContext,
+  };
+
   return {
     word: String(word || '').trim(),
     meanings: normalizedMeanings,
     meaning: fallbackMeaning,
-    example: String(example || '').trim(),
+    example: exampleBasic,
     ipa: String(ipa || '').trim(),
+    synonyms: normalizeSupportObjectList(synonyms),
+    antonyms: normalizeSupportObjectList(antonyms),
+    examples: normalizedExamples,
     topic: String(topic || '').trim() || DEFAULT_TOPIC,
     subTopic: String(subTopic || '').trim() || DEFAULT_SUBTOPIC,
     type: String(type || '').trim() || DEFAULT_TYPE,
@@ -827,6 +946,14 @@ export async function addVocabularyEntry(entry) {
     entry.subTopic,
     entry.type,
     entry.meanings || entry.meaning,
+    entry.synonyms,
+    entry.antonyms,
+    entry.definition,
+    entry.collocations,
+    entry.basicExample,
+    entry.conversationExample,
+    entry.lessonExample,
+    entry.examples,
   );
 
   if (!normalizedEntry.word) {
